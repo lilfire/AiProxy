@@ -36,19 +36,29 @@ public class OpenAiResponsesOutput
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Arguments { get; init; }
 
+    [JsonPropertyName("input")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Input { get; init; }
+
     [JsonPropertyName("status")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Status { get; init; }
 
-    public static OpenAiResponsesOutput CreateFunctionCall(string itemId, string callId, string name, string arguments) => new([])
+    public static OpenAiResponsesOutput CreateFunctionCall(string itemId, string callId, string name, string arguments) =>
+        CreateToolCall(itemId, callId, name, arguments, OpenAiConstants.ToolCalls.FunctionType);
+
+    public static OpenAiResponsesOutput CreateToolCall(string itemId, string callId, string name, string input, string toolType) => new([])
     {
-        Type = OpenAiConstants.ResponseObjectTypes.FunctionCall,
+        Type = toolType == OpenAiConstants.ToolCalls.CustomType
+            ? OpenAiConstants.ResponseObjectTypes.CustomToolCall
+            : OpenAiConstants.ResponseObjectTypes.FunctionCall,
         Role = null,
         Content = null,
         Id = itemId,
         CallId = callId,
         Name = name,
-        Arguments = arguments,
+        Arguments = toolType == OpenAiConstants.ToolCalls.CustomType ? null : input,
+        Input = toolType == OpenAiConstants.ToolCalls.CustomType ? input : null,
         Status = OpenAiConstants.ResponseStatuses.Completed
     };
 }

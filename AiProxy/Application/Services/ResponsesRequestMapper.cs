@@ -26,8 +26,8 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
             MaxTokens = request.MaxTokens,
             ToolChoice = request.ToolChoice?.Clone(),
             FunctionTools = request.Tools?
-                .Where(tool => tool.Type == OpenAiConstants.ToolCalls.FunctionType && !string.IsNullOrWhiteSpace(tool.Name))
-                .Select(tool => new OpenAiFunctionTool(tool.Name, tool.Description, tool.Parameters, tool.Strict))
+                .Select(tool => tool.ToCallableTool())
+                .OfType<OpenAiFunctionTool>()
                 .ToList() ?? [],
             PreviousToolCalls = ExtractToolCalls(request.Input),
             ToolResults = ExtractToolResults(request.Input)
@@ -52,12 +52,13 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
 
         foreach (var item in items.EnumerateArray())
         {
-            if (GetStringProperty(item, "type") != OpenAiConstants.ResponseInputTypes.FunctionCall)
+            var type = GetStringProperty(item, "type");
+            if (type != OpenAiConstants.ResponseInputTypes.FunctionCall && type != OpenAiConstants.ResponseInputTypes.CustomToolCall)
                 continue;
 
             var callId = GetStringProperty(item, "call_id");
             var name = GetStringProperty(item, "name");
-            var arguments = GetStringProperty(item, "arguments");
+            var arguments = GetStringProperty(item, type == OpenAiConstants.ResponseInputTypes.CustomToolCall ? "input" : "arguments");
             if (!string.IsNullOrWhiteSpace(callId) && !string.IsNullOrWhiteSpace(name) && arguments != null)
                 result.Add(new OpenAiToolCall(callId, name, arguments));
         }
@@ -73,7 +74,8 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
 
         foreach (var item in items.EnumerateArray())
         {
-            if (GetStringProperty(item, "type") != OpenAiConstants.ResponseInputTypes.FunctionCallOutput)
+            var type = GetStringProperty(item, "type");
+            if (type != OpenAiConstants.ResponseInputTypes.FunctionCallOutput && type != OpenAiConstants.ResponseInputTypes.CustomToolCallOutput)
                 continue;
 
             var callId = GetStringProperty(item, "call_id");
@@ -136,7 +138,9 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
         var type = GetStringProperty(item, "type");
 
         return type == OpenAiConstants.ResponseInputTypes.FunctionCall
-            || type == OpenAiConstants.ResponseInputTypes.FunctionCallOutput;
+            || type == OpenAiConstants.ResponseInputTypes.FunctionCallOutput
+            || type == OpenAiConstants.ResponseInputTypes.CustomToolCall
+            || type == OpenAiConstants.ResponseInputTypes.CustomToolCallOutput;
     }
 
     private OpenAiMessage ConvertResponseItemToMessage(JsonElement item)

@@ -20,4 +20,9 @@ public class OpenAiResponsesTool
 
     [JsonPropertyName("strict")]
     public bool? Strict { get; set; }
+
+    public OpenAiFunctionTool? ToCallableTool() =>
+        (Type == OpenAiConstants.ToolCalls.FunctionType || Type == OpenAiConstants.ToolCalls.CustomType) && !string.IsNullOrWhiteSpace(Name)
+            ? new OpenAiFunctionTool(Name, Description, Parameters, Strict, Type)
+            : null;
 }

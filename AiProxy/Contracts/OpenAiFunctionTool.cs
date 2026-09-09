@@ -6,18 +6,20 @@ namespace AiProxy.Contracts;
 /// <summary>A normalized client-declared function.  Providers must never infer tools from model text.</summary>
 public sealed class OpenAiFunctionTool
 {
-    public OpenAiFunctionTool(string name, string? description, JsonElement? parameters, bool? strict = null)
+    public OpenAiFunctionTool(string name, string? description, JsonElement? parameters, bool? strict = null, string type = OpenAiConstants.ToolCalls.FunctionType)
     {
         Name = name;
         Description = description;
         Parameters = parameters?.Clone();
         Strict = strict;
+        Type = type;
     }
 
     public string Name { get; }
     public string? Description { get; }
     public JsonElement? Parameters { get; }
     public bool? Strict { get; }
+    public string Type { get; }
 }
 
 /// <summary>Chat Completions nests a function declaration below the <c>function</c> property.</summary>
@@ -55,4 +57,8 @@ public sealed record OpenAiToolCall(string Id, string Name, string ArgumentsJson
 public sealed record OpenAiToolResult(string CallId, string Output);
 
 /// <summary>A completed request by a provider for the client to run one declared function.</summary>
-public sealed record OpenAiProviderToolCall(string CallId, string Name, string ArgumentsJson);
+public sealed record OpenAiProviderToolCall(
+    string CallId,
+    string Name,
+    string ArgumentsJson,
+    string Type = OpenAiConstants.ToolCalls.FunctionType);

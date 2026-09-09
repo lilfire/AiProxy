@@ -150,7 +150,7 @@ public sealed class OpenAiResponseEventBuilder : IOpenAiResponseEventBuilder
     {
         return new JsonObject
         {
-            ["type"] = OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDelta,
+            ["type"] = IsCustom(todoCall) ? OpenAiConstants.ResponseEventTypes.CustomToolCallInputDelta : OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDelta,
             ["item_id"] = todoCall.ItemId,
             ["output_index"] = _functionCallOutputIndex,
             ["delta"] = todoCall.ArgumentsJson
@@ -159,12 +159,13 @@ public sealed class OpenAiResponseEventBuilder : IOpenAiResponseEventBuilder
 
     public string CreateFunctionCallArgumentsDoneEventJson(OpenAiTodoCall todoCall)
     {
+        var isCustom = IsCustom(todoCall);
         return new JsonObject
         {
-            ["type"] = OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDone,
+            ["type"] = isCustom ? OpenAiConstants.ResponseEventTypes.CustomToolCallInputDone : OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDone,
             ["item_id"] = todoCall.ItemId,
             ["output_index"] = _functionCallOutputIndex,
-            ["arguments"] = todoCall.ArgumentsJson
+            [isCustom ? "input" : "arguments"] = todoCall.ArgumentsJson
         }.ToJsonString();
     }
 
@@ -196,14 +197,17 @@ public sealed class OpenAiResponseEventBuilder : IOpenAiResponseEventBuilder
     /// <summary>id er item-id-en, call_id er den klienten refererer i verktøyresultatet.</summary>
     private JsonObject CreateFunctionCallItemNode(OpenAiTodoCall todoCall, string arguments, string status)
     {
+        var isCustom = IsCustom(todoCall);
         return new JsonObject
         {
             ["id"] = todoCall.ItemId,
-            ["type"] = _functionCallType,
+            ["type"] = isCustom ? OpenAiConstants.ResponseObjectTypes.CustomToolCall : _functionCallType,
             ["call_id"] = todoCall.CallId,
             ["name"] = todoCall.Name,
-            ["arguments"] = arguments,
+            [isCustom ? "input" : "arguments"] = arguments,
             ["status"] = status
         };
     }
+
+    private static bool IsCustom(OpenAiTodoCall call) => call.Type == OpenAiConstants.ToolCalls.CustomType;
 }

@@ -63,6 +63,8 @@ public static class OpenAiConstants
         public const string Completed = "response.completed";
         public const string FunctionCallArgumentsDelta = "response.function_call_arguments.delta";
         public const string FunctionCallArgumentsDone = "response.function_call_arguments.done";
+        public const string CustomToolCallInputDelta = "response.custom_tool_call_input.delta";
+        public const string CustomToolCallInputDone = "response.custom_tool_call_input.done";
     }
 
     public static class ResponseStatuses
@@ -77,6 +79,7 @@ public static class OpenAiConstants
         public const string Message = "message";
         public const string OutputText = "output_text";
         public const string FunctionCall = "function_call";
+        public const string CustomToolCall = "custom_tool_call";
     }
 
     public static class ResponseInputTypes
@@ -86,11 +89,14 @@ public static class OpenAiConstants
         public const string Message = "message";
         public const string FunctionCall = "function_call";
         public const string FunctionCallOutput = "function_call_output";
+        public const string CustomToolCall = "custom_tool_call";
+        public const string CustomToolCallOutput = "custom_tool_call_output";
     }
 
     public static class ToolCalls
     {
         public const string FunctionType = "function";
+        public const string CustomType = "custom";
         public const string ProxyTodoCallIdPrefix = "call_aiproxy_todo_";
         public const string ProxyTodoItemIdPrefix = "fc_aiproxy_todo_";
         public const string TodoWriteName = "todowrite";

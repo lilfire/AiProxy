@@ -146,7 +146,7 @@ public sealed class ResponsesService : IResponsesService
     }
 
     private static OpenAiTodoCall? ToOutputCall(OpenAiProviderToolCall? call) => call == null ? null :
-        new OpenAiTodoCall("fc_" + Guid.NewGuid().ToString("N"), call.CallId, call.Name, call.ArgumentsJson);
+        new OpenAiTodoCall("fc_" + Guid.NewGuid().ToString("N"), call.CallId, call.Name, call.ArgumentsJson, call.Type);
 
     /// <summary>
     /// Klienten har kjørt vårt eget todo-verktøy og sender bare resultatet tilbake. Turen
@@ -210,7 +210,7 @@ public sealed class ResponsesService : IResponsesService
         };
 
         if (todoCall != null)
-            response.Output.Add(OpenAiResponsesOutput.CreateFunctionCall(todoCall.ItemId, todoCall.CallId, todoCall.Name, todoCall.ArgumentsJson));
+            response.Output.Add(OpenAiResponsesOutput.CreateToolCall(todoCall.ItemId, todoCall.CallId, todoCall.Name, todoCall.ArgumentsJson, todoCall.Type));
 
         return response;
     }
@@ -346,9 +346,10 @@ public sealed class ResponsesService : IResponsesService
 
     private async Task WriteFunctionCallEventsAsync(StreamWriter writer, Stream stream, OpenAiTodoCall todoCall, CancellationToken cancellationToken)
     {
+        var isCustom = todoCall.Type == OpenAiConstants.ToolCalls.CustomType;
         await WriteEventAsync(writer, stream, OpenAiConstants.ResponseEventTypes.OutputItemAdded, _eventBuilder.CreateFunctionCallItemAddedEventJson(todoCall), cancellationToken);
-        await WriteEventAsync(writer, stream, OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDelta, _eventBuilder.CreateFunctionCallArgumentsDeltaEventJson(todoCall), cancellationToken);
-        await WriteEventAsync(writer, stream, OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDone, _eventBuilder.CreateFunctionCallArgumentsDoneEventJson(todoCall), cancellationToken);
+        await WriteEventAsync(writer, stream, isCustom ? OpenAiConstants.ResponseEventTypes.CustomToolCallInputDelta : OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDelta, _eventBuilder.CreateFunctionCallArgumentsDeltaEventJson(todoCall), cancellationToken);
+        await WriteEventAsync(writer, stream, isCustom ? OpenAiConstants.ResponseEventTypes.CustomToolCallInputDone : OpenAiConstants.ResponseEventTypes.FunctionCallArgumentsDone, _eventBuilder.CreateFunctionCallArgumentsDoneEventJson(todoCall), cancellationToken);
         await WriteEventAsync(writer, stream, OpenAiConstants.ResponseEventTypes.OutputItemDone, _eventBuilder.CreateFunctionCallItemDoneEventJson(todoCall), cancellationToken);
     }
 

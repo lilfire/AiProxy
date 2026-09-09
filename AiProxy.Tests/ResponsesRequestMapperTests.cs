@@ -231,6 +231,23 @@ public class ResponsesRequestMapperTests
     }
 
     [TestMethod]
+    public void MapToChatRequest_preserves_custom_tools_for_tool_provider()
+    {
+        var request = new OpenAiResponsesRequest
+        {
+            Model = "test-model",
+            Input = JsonSerializer.SerializeToElement("List files"),
+            Tools = [new OpenAiResponsesTool { Type = "custom", Name = "glob", Description = "Lists matching paths" }]
+        };
+
+        var result = CreateMapper().MapToChatRequest(request);
+
+        Assert.AreEqual(1, result.FunctionTools.Count);
+        Assert.AreEqual("glob", result.FunctionTools.Single().Name);
+        Assert.AreEqual("custom", result.FunctionTools.Single().Type);
+    }
+
+    [TestMethod]
     public void MapToChatRequest_removes_messages_without_content()
     {
         var mapper = CreateMapper();

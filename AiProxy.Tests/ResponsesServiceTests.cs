@@ -199,6 +199,28 @@ public class ResponsesServiceTests
         Assert.IsFalse(body.Contains("```tool_call", StringComparison.Ordinal));
     }
 
+    [TestMethod]
+    public async Task Execute_streaming_emits_custom_tool_events_for_a_custom_tool()
+    {
+        var provider = new FakeToolAwareChatProvider(["model-1"], new OpenAiToolExecutionResult("", new OpenAiProviderToolCall("call_client_glob", "glob", "{\"pattern\":\"*\"}", "custom")));
+        var service = CreateService(provider, CreateStoreWithTodos());
+        var request = new OpenAiResponsesRequest
+        {
+            Model = "model-1",
+            Stream = true,
+            Input = JsonSerializer.SerializeToElement("List files"),
+            Tools = [new OpenAiResponsesTool { Type = "custom", Name = "glob", Description = "Lists matching paths" }]
+        };
+
+        var body = await new SseResultReader().ReadAsync(await service.ExecuteAsync(request, "session-1"));
+        var completed = ParseLastEventData(body, "response.completed");
+        var output = completed.GetProperty("response").GetProperty("output");
+
+        StringAssert.Contains(body, "event: response.custom_tool_call_input.done");
+        Assert.AreEqual("custom_tool_call", output[1].GetProperty("type").GetString());
+        Assert.AreEqual("{\"pattern\":\"*\"}", output[1].GetProperty("input").GetString());
+    }
+
     private ResponsesService CreateService(IChatProvider provider, ITodoSnapshotStore todoStore, bool todoBridgeEnabled = true)
     {
         var options = Options.Create(new AiProxyOptions { TodoBridgeEnabled = todoBridgeEnabled });

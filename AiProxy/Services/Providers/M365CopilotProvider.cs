@@ -93,11 +93,20 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
 
         // Tool mode is intentionally buffered: neither a fence nor a malformed call can leak to
-        // the client as assistant text.  It also deliberately does not ask the workspace bridge
-        // to read a snapshot or apply model-authored file blocks.
+        // the client as assistant text. A read-only workspace snapshot gives the model the
+        // project context it needs while declared client tools remain the only write path.
+        // Model-authored file blocks are never applied in this mode.
+        var workspace = await _workspaceBridge.BuildPromptAsync(
+            BuildPrompt(request.Messages), _settings.Current.M365Copilot, cancellationToken);
         var prompt = M365ToolProtocol.AppendInstruction(
-            BuildPrompt(request.Messages), request.FunctionTools, request.ToolChoice,
+            workspace.Prompt, request.FunctionTools, request.ToolChoice,
             request.PreviousToolCalls, request.ToolResults);
+        var requiresWriteCall = M365ToolProtocol.RequiresDeclaredWriteCall(request.Messages, request.FunctionTools);
+        if (requiresWriteCall)
+            prompt += "\n\n<required-local-write>" +
+                "The user explicitly requested a local file change. Invoke the declared client write tool now. " +
+                "Do not create a cloud document, return a link, or describe a completed change as text." +
+                "</required-local-write>";
         var answer = await ExecuteRawAsync(request, sessionId, prompt, cancellationToken);
 
         if (M365ToolProtocol.TryParse(answer, request.FunctionTools, out var call))
@@ -106,6 +115,39 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
                 throw new InvalidOperationException("M365 Copilot forsøkte et verktøykall som tool_choice ikke tillater.");
 
             return new OpenAiToolExecutionResult(string.Empty, call);
+        }
+
+        // M365 sometimes substitutes a cloud artifact or a prose answer for a local file write.
+        // Retry once with an unambiguous instruction; a second text-only answer must not be
+        // presented to the client as though the requested file had been changed.
+        if (requiresWriteCall)
+        {
+            var retryPrompt = prompt + "\n\n<tool-call-required>Return exactly one declared client write-tool call now. No prose, links, or cloud artifacts.</tool-call-required>";
+            answer = await ExecuteRawAsync(request, sessionId, retryPrompt, cancellationToken);
+            if (M365ToolProtocol.TryParse(answer, request.FunctionTools, out call))
+            {
+                if (!M365ToolProtocol.IsAllowedByChoice(request.ToolChoice, call!.Name))
+                    throw new InvalidOperationException("M365 Copilot forsøkte et verktøykall som tool_choice ikke tillater.");
+
+                return new OpenAiToolExecutionResult(string.Empty, call);
+            }
+
+            var fallbackWorkspace = CreateExplicitWriteFallbackWorkspace(request.Messages, workspace);
+            if (fallbackWorkspace != null)
+            {
+                var fallbackPrompt = workspace.Prompt +
+                    "\n\n<required-local-file-block>" +
+                    "The client tool transport was unavailable. Return only the complete replacement content for the explicitly requested local file in this exact form, without Markdown: " +
+                    $"\n===FILE: {fallbackWorkspace.Files.Keys.Single()}===\n<complete content>\n===END FILE===\n" +
+                    "Do not create a cloud document or return a link." +
+                    "</required-local-file-block>";
+                var fallbackAnswer = await ExecuteRawAsync(request, sessionId, fallbackPrompt, cancellationToken);
+                var writeResult = await _workspaceBridge.ApplyWritesAsync(fallbackAnswer, fallbackWorkspace, createBackups: false, cancellationToken);
+                if (writeResult.WrittenFiles.Count > 0)
+                    return new OpenAiToolExecutionResult(writeResult.Answer, null);
+            }
+
+            throw new InvalidOperationException("M365 Copilot fullførte ikke det påkrevde lokale skriveverktøykallet.");
         }
 
         if (M365ToolProtocol.IsToolFence(answer))
@@ -444,6 +486,29 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
     private static string BuildPrompt(IEnumerable<OpenAiMessage> messages) => string.Join(
         "\n\n",
         messages.Select(message => $"{message.Role.ToUpperInvariant()}:\n{RemoveClientControlContext(message.Content)}"));
+
+    private static M365WorkspacePrompt? CreateExplicitWriteFallbackWorkspace(
+        IReadOnlyList<OpenAiMessage> messages,
+        M365WorkspacePrompt workspace)
+    {
+        var userText = string.Join("\n", messages
+            .Where(message => string.Equals(message.Role, OpenAiConstants.Roles.User, StringComparison.OrdinalIgnoreCase))
+            .Select(message => message.Content));
+        var matchingFiles = workspace.Files
+            .Where(file => userText.Contains(Path.GetFileName(file.Key), StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToArray();
+
+        // A fallback may replace exactly one existing file named by the user. This preserves the
+        // normal tool-first flow while making a cloud link unable to mutate project structure.
+        if (matchingFiles.Length != 1)
+            return null;
+
+        return new M365WorkspacePrompt(
+            workspace.Prompt,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [matchingFiles[0].Key] = matchingFiles[0].Value },
+            WritesEnabled: true);
+    }
 
     private static string RemoveClientControlContext(string? content) =>
         string.IsNullOrEmpty(content) ? string.Empty : PlanModeReminderPattern.Replace(content, "\n").Trim();

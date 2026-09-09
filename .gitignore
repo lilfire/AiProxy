@@ -229,3 +229,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Runtime admin settings (machine-specific paths)
+AiProxy/aiproxy.admin.json
