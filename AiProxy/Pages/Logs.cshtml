@@ -1,0 +1,76 @@
+@page "/admin/logs"
+@{ ViewData["Title"] = "Logger"; }
+<div class="page-heading"><div><p class="eyebrow">Feilsøking</p><h1>Logger</h1><p class="subtitle">Løpende applikasjonslogger fra denne kjøringen. De siste 1 000 hendelsene beholdes kun i minnet.</p></div><span id="connection-status" class="status bad">Kobler til</span></div>
+<div class="log-toolbar"><button id="pause-button" class="secondary" type="button">Pause</button><button id="clear-button" class="secondary" type="button">Tøm visning</button><p id="log-count" class="meta">0 hendelser vist</p></div>
+<section id="log-view" class="log-view" aria-live="polite" aria-label="Applikasjonslogger"></section>
+
+<script>
+(() => {
+    const view = document.getElementById('log-view');
+    const pauseButton = document.getElementById('pause-button');
+    const clearButton = document.getElementById('clear-button');
+    const count = document.getElementById('log-count');
+    const status = document.getElementById('connection-status');
+    const limit = 1000;
+    let paused = false;
+    let pending = [];
+
+    const updateCount = () => count.textContent = `${view.childElementCount} hendelser vist${pending.length ? ` · ${pending.length} på vent` : ''}`;
+    const scrollToLatest = () => { view.scrollTop = view.scrollHeight; };
+    const addEntry = entry => {
+        const row = document.createElement('article');
+        row.className = 'log-entry';
+        const timestamp = new Date(entry.timestamp).toLocaleString('nb-NO', { hour12: false });
+        const fields = [
+            ['time', timestamp],
+            [`level ${entry.level}`, entry.level],
+            ['category', entry.category],
+            ['message', entry.message || '(tom melding)']
+        ];
+        fields.forEach(([className, value]) => {
+            const field = document.createElement('span');
+            field.className = className;
+            field.textContent = value;
+            row.appendChild(field);
+        });
+        if (entry.exception) {
+            const exception = document.createElement('pre');
+            exception.className = 'log-exception';
+            exception.textContent = entry.exception;
+            row.appendChild(exception);
+        }
+        view.appendChild(row);
+        while (view.childElementCount > limit)
+            view.firstElementChild.remove();
+        updateCount();
+        scrollToLatest();
+    };
+    const receive = entry => {
+        if (!paused) {
+            addEntry(entry);
+            return;
+        }
+        if (pending.length === limit)
+            pending.shift();
+        pending.push(entry);
+        updateCount();
+    };
+
+    pauseButton.addEventListener('click', () => {
+        paused = !paused;
+        pauseButton.textContent = paused ? 'Fortsett' : 'Pause';
+        if (!paused) {
+            const entries = pending;
+            pending = [];
+            entries.forEach(addEntry);
+        }
+        updateCount();
+    });
+    clearButton.addEventListener('click', () => { view.replaceChildren(); updateCount(); });
+
+    const source = new EventSource('/admin/api/logs/stream');
+    source.addEventListener('log', event => receive(JSON.parse(event.data)));
+    source.onopen = () => { status.textContent = 'Tilkoblet'; status.className = 'status ok'; };
+    source.onerror = () => { status.textContent = 'Kobler til på nytt'; status.className = 'status bad'; };
+})();
+</script>

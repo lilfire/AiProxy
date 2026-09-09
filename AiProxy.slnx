@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AiProxy.Tests/AiProxy.Tests.csproj" />
+  <Project Path="AiProxy/AiProxy.csproj" />
+</Solution>

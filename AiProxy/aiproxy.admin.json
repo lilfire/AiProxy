@@ -1,0 +1,20 @@
+{
+  "TimeoutSeconds": 300,
+  "CacheTtlSeconds": 60,
+  "TodoBridgeEnabled": true,
+  "Providers": {
+    "Aigravity": true,
+    "Grok": true,
+    "Claude": true,
+    "Codex": true,
+    "M365": true
+  },
+  "Models": [],
+  "M365Copilot": {
+    "Enabled": true,
+    "EnableInteractiveLogin": true,
+    "CacheDirectory": "",
+    "Locale": "en-GB",
+    "TimeZone": "Europe/Oslo"
+  }
+}

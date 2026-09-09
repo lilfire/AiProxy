@@ -1,0 +1,11 @@
+@page "/admin/settings"
+@model SettingsModel
+@{ ViewData["Title"] = "Innstillinger"; }
+<div class="page-heading"><div><p class="eyebrow">Standardatferd</p><h1>AI-innstillinger</h1><p class="subtitle">Disse innstillingene brukes av nye forespørsler uten at tjenesten startes på nytt.</p></div></div>
+@if (Model.Saved) { <p class="notice">Innstillingene er lagret og gjelder umiddelbart.</p> }
+<form method="post">
+    <div class="field"><label asp-for="Settings.TimeoutSeconds">Timeout i sekunder</label><input asp-for="Settings.TimeoutSeconds" type="number" min="5" max="3600" /></div>
+    <div class="field"><label asp-for="Settings.CacheTtlSeconds">Modellcache i sekunder</label><input asp-for="Settings.CacheTtlSeconds" type="number" min="0" max="3600" /></div>
+    <div class="field"><label><input asp-for="Settings.TodoBridgeEnabled" /> Videresend TodoWrite til OpenCode</label></div>
+    <div class="actions"><button type="submit">Lagre innstillinger</button></div>
+</form>

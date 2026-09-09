@@ -1,0 +1,87 @@
+@page "/admin"
+@model IndexModel
+@{ ViewData["Title"] = "Administrasjon"; }
+
+<div class="dashboard">
+    <div class="page-heading dashboard-heading">
+        <div>
+            <p class="eyebrow">Kontrollpanel</p>
+            <h1>AiProxy-administrasjon</h1>
+            <p class="subtitle">Status og styring av modellproviders på denne maskinen.</p>
+        </div>
+        <div class="actions">
+            <a class="button secondary" asp-page="/Providers">Administrer providers</a>
+            <a class="button" asp-page="/Models">Administrer modeller</a>
+        </div>
+    </div>
+
+    <div class="dashboard-summary">
+        <section class="card summary-card">
+            <p class="eyebrow">Synlige modeller</p>
+            <div class="stat">@Model.ModelCount</div>
+            <p class="meta">Eksponert via <code>/v1/models</code></p>
+        </section>
+        <section class="card summary-card">
+            <p class="eyebrow">M365 Copilot</p>
+            <div class="stat">@(Model.M365Status.IsSignedIn ? "Klar" : "Logg inn")</div>
+            <p class="meta">@(Model.M365Status.Username ?? "Ingen Microsoft-konto er tilkoblet")</p>
+            <a class="card-link" asp-page="/M365">Åpne M365-innstillinger <span aria-hidden="true">→</span></a>
+        </section>
+    </div>
+
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Tjenester</p>
+            <h2>Providers</h2>
+        </div>
+        <p class="meta compact">@Model.Providers.Count aktive forbindelser</p>
+    </div>
+
+    <div class="provider-list">
+    @foreach (var provider in Model.Providers)
+    {
+        <section class="card provider-card">
+            <div class="provider-identity">
+                <div class="card-head">
+                    <h3>@provider.Name</h3>
+                    <span class="status @(provider.Enabled && provider.Available ? "ok" : "bad")">@(provider.Enabled ? "Aktiv" : "Deaktivert")</span>
+                </div>
+                <p class="meta provider-detail">@provider.Detail</p>
+            </div>
+
+            <div class="provider-details">
+                <div class="usage">
+                    <p class="eyebrow">Abonnementskvote</p>
+                    @if (provider.Quota is { Windows.Count: > 0 } quota)
+                    {
+                        foreach (var window in quota.Windows)
+                        {
+                            <div class="quota-window">
+                                <p><strong>@window.Name</strong></p>
+                                <p class="quota-value">@window.UsedPercent % brukt <span>· @(100 - window.UsedPercent) % igjen</span></p>
+                                <p class="meta">@(window.ResetsAt is { } reset ? $"Nullstilles {reset.ToLocalTime():dd.MM HH:mm}" : "Ingen nullstillingstid oppgitt")</p>
+                            </div>
+                        }
+                    }
+                    else if (provider.Quota?.Error is { } error)
+                    {
+                        <p class="meta">@error</p>
+                    }
+                    else
+                    {
+                        <p class="meta">Laster abonnementskvote …</p>
+                    }
+                </div>
+
+                <div class="usage usage-activity">
+                    <p class="eyebrow">Bruk via AiProxy</p>
+                    <p><strong>@provider.Usage.CompletedRequests</strong> fullførte forespørsler</p>
+                    <p class="meta">@provider.Usage.CompletedRequestsLast24Hours siste 24 t · @(provider.Usage.LastUsedAt is { } lastUsed ? $"sist brukt {lastUsed.ToLocalTime():dd.MM.yyyy HH:mm}" : "ingen forespørsler registrert ennå")</p>
+                </div>
+            </div>
+
+            <a class="card-link provider-link" asp-page="/Providers">Endre provider <span aria-hidden="true">→</span></a>
+        </section>
+    }
+    </div>
+</div>

@@ -1,0 +1,89 @@
+@page "/admin/sessions"
+@{ ViewData["Title"] = "Sesjoner"; }
+<div class="page-heading"><div><p class="eyebrow">Samtalehistorikk</p><h1>Sesjoner</h1><p class="subtitle">Input og svar fra alle sesjoner i denne kjøringen. Historikken slettes når AiProxy startes på nytt.</p></div><span id="connection-status" class="status bad">Kobler til</span></div>
+<div class="sessions">
+    <aside id="session-list" class="session-list" aria-label="Sesjoner"></aside>
+    <section id="conversation" class="conversation" aria-live="polite"></section>
+</div>
+
+<script>
+(() => {
+    const list = document.getElementById('session-list');
+    const conversation = document.getElementById('conversation');
+    const status = document.getElementById('connection-status');
+    let sessions = [];
+    let selectedId = null;
+
+    const formatDate = value => new Date(value).toLocaleString('nb-NO', { hour12: false });
+    const addText = (parent, tag, text, className) => {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        element.textContent = text;
+        parent.appendChild(element);
+        return element;
+    };
+    const latestTurn = session => session.turns[session.turns.length - 1];
+    const renderList = () => {
+        list.replaceChildren();
+        if (!sessions.length) {
+            addText(list, 'p', 'Ingen sesjoner registrert ennå.', 'meta');
+            return;
+        }
+        sessions.forEach(session => {
+            const turn = latestTurn(session);
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `session-item${session.id === selectedId ? ' selected' : ''}`;
+            addText(button, 'span', session.id, 'session-id');
+            addText(button, 'p', `${formatDate(session.lastActivityAt)} · ${turn.provider || turn.model}`, 'meta');
+            addText(button, 'p', `${session.turns.length} ${session.turns.length === 1 ? 'tur' : 'turer'} · ${turn.status}`, 'meta');
+            button.addEventListener('click', () => { selectedId = session.id; render(); });
+            list.appendChild(button);
+        });
+    };
+    const renderConversation = () => {
+        conversation.replaceChildren();
+        const session = sessions.find(item => item.id === selectedId);
+        if (!session) {
+            const empty = document.createElement('div'); empty.className = 'conversation-empty';
+            addText(empty, 'p', 'Velg en sesjon for å se input og svar.');
+            conversation.appendChild(empty); return;
+        }
+        const heading = document.createElement('div'); heading.className = 'turn-head';
+        addText(heading, 'h2', session.id);
+        addText(heading, 'p', `Startet ${formatDate(session.startedAt)} · ${session.turns.length} turer`, 'meta');
+        conversation.appendChild(heading);
+        session.turns.forEach(turn => {
+            const article = document.createElement('article'); article.className = 'turn';
+            const head = document.createElement('div'); head.className = 'turn-head';
+            addText(head, 'h2', `${turn.provider || 'Uavklart provider'} · ${turn.model}`);
+            addText(head, 'span', turn.status === 'in_progress' ? 'Pågår' : turn.status === 'completed' ? 'Fullført' : 'Feilet', `turn-status ${turn.status}`);
+            article.appendChild(head);
+            addText(article, 'p', `${turn.api} · ${formatDate(turn.startedAt)}`, 'meta');
+            if (turn.input.length) turn.input.forEach(message => messageBlock(article, message.role, message.content, 'input'));
+            else messageBlock(article, 'input', '(Ingen tekst ble sendt til modellen)', 'input');
+            if (turn.output !== null) messageBlock(article, 'svar', turn.output || '(Tomt svar)', 'assistant');
+            if (turn.error) messageBlock(article, 'feil', turn.error, 'turn-error');
+            conversation.appendChild(article);
+        });
+    };
+    const messageBlock = (parent, label, content, className) => {
+        const block = document.createElement('div'); block.className = `turn-message ${className}`;
+        addText(block, 'p', label); addText(block, 'pre', content);
+        parent.appendChild(block);
+    };
+    const render = () => { renderList(); renderConversation(); };
+    const load = async () => {
+        const response = await fetch('/admin/api/sessions');
+        if (!response.ok) throw new Error('Kunne ikke hente sesjoner');
+        sessions = await response.json();
+        if (!selectedId || !sessions.some(session => session.id === selectedId)) selectedId = sessions[0]?.id || null;
+        render();
+    };
+    load().catch(() => { status.textContent = 'Kunne ikke hente data'; status.className = 'status bad'; });
+    const source = new EventSource('/admin/api/sessions/stream');
+    source.addEventListener('session', () => load().catch(() => {}));
+    source.onopen = () => { status.textContent = 'Tilkoblet'; status.className = 'status ok'; };
+    source.onerror = () => { status.textContent = 'Kobler til på nytt'; status.className = 'status bad'; };
+})();
+</script>

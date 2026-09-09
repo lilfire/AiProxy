@@ -1,0 +1,9 @@
+@page "/admin/providers"
+@model ProvidersModel
+@{ ViewData["Title"] = "Providers"; }
+<div class="page-heading"><div><p class="eyebrow">Tilgjengelighet og ruting</p><h1>Providers</h1><p class="subtitle">Slå av en provider for å hindre nye forespørsler til den. Endringen virker umiddelbart.</p></div><a class="button secondary" asp-page="/Models">Modellkatalog</a></div>
+@if (Model.Saved) { <p class="notice">Providerinnstillingene er lagret og gjelder for nye forespørsler.</p> }
+<form method="post"><table><thead><tr><th>Provider</th><th>Bruk i AiProxy</th><th>Abonnementskvote</th><th>Tilgjengelighet</th></tr></thead><tbody>
+@for (var i = 0; i < Model.Providers.Count; i++) {
+<tr><td><input type="hidden" asp-for="Providers[i].Name" /><strong>@Model.Providers[i].Name</strong></td><td><label><input asp-for="Providers[i].Enabled" /> Aktiv</label></td><td>@if (Model.Providers[i].Quota is { Windows.Count: > 0 } quota) { foreach (var window in quota.Windows) { <div><strong>@window.Name:</strong> @window.UsedPercent % brukt · @(100 - window.UsedPercent) % igjen @if (window.ResetsAt is { } reset) { <span class="meta compact">(nullstilles @reset.ToLocalTime().ToString("dd.MM HH:mm"))</span> }</div> } } else if (Model.Providers[i].Quota?.Error is { } error) { <span class="meta compact">@error</span> } else { <span class="meta compact">Laster abonnementskvote …</span> }</td><td class="@(Model.Providers[i].Available ? "ok" : "bad")">@Model.Providers[i].Detail</td></tr> }
+</tbody></table><div class="actions"><button type="submit">Lagre endringer</button><a class="button secondary" asp-page="/Index">Avbryt</a></div></form>

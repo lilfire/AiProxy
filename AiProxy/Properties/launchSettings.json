@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "AiProxy": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "admin",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "http://127.0.0.1:3489"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+@page "/admin/models"
+@model ModelsModel
+@{ ViewData["Title"] = "Modeller"; }
+<div class="page-heading"><div><p class="eyebrow">Klientkatalog</p><h1>Modeller</h1><p class="subtitle">Velg hvilke modeller klienter kan se, og gi dem valgfrie stabile alias.</p></div><a class="button secondary" asp-page="/Settings">Standardruting</a></div>
+@if (Model.Saved) { <p class="notice">Modellkatalogen er lagret.</p> }
+<form method="post"><table><thead><tr><th>Provider</th><th>Provider-modell</th><th>Synlig</th><th>Alias</th></tr></thead><tbody>
+@for (var i = 0; i < Model.Models.Count; i++) {
+<tr><td><input type="hidden" asp-for="Models[i].ProviderName" />@Model.Models[i].ProviderName</td><td><input type="hidden" asp-for="Models[i].ModelId" />@Model.Models[i].ModelId</td><td><input asp-for="Models[i].Enabled" /></td><td><input asp-for="Models[i].Alias" placeholder="Valgfritt alias" /></td></tr> }
+</tbody></table><div class="actions"><button type="submit">Lagre modellkatalog</button><button type="submit" class="button secondary" asp-page-handler="Refresh">Oppdater oppdagelse</button></div></form>
