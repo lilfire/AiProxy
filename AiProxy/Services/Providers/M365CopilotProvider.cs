@@ -103,6 +103,19 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             request.PreviousToolCalls, request.ToolResults);
         var requiresWriteCall = M365ToolProtocol.RequiresDeclaredWriteCall(request.Messages, request.FunctionTools);
         if (requiresWriteCall)
+        {
+            var lastUserMsgs = request.Messages
+                .Where(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))
+                .TakeLast(2)
+                .Select(m => Truncate(m.Content ?? "", 200));
+            var matchingTools = request.FunctionTools
+                .Where(t => M365ToolProtocol.IsLikelyWriteTool(t))
+                .Select(t => t.Name);
+            _logger.LogWarning(
+                "RequiresDeclaredWriteCall=true. Brukermeldinger: {Messages} | Verktøy som matcher IsLikelyWriteTool: {Tools}",
+                string.Join(" | ", lastUserMsgs), string.Join(", ", matchingTools));
+        }
+        if (requiresWriteCall)
             prompt += "\n\n<required-local-write>" +
                 "The user explicitly requested a local file change. Invoke the declared client write tool now. " +
                 "Do not create a cloud document, return a link, or describe a completed change as text." +
@@ -117,35 +130,11 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             return new OpenAiToolExecutionResult(string.Empty, call);
         }
 
-        // M365 sometimes substitutes a cloud artifact or a prose answer for a local file write.
-        // Retry once with an unambiguous instruction; a second text-only answer must not be
-        // presented to the client as though the requested file had been changed.
         if (requiresWriteCall)
         {
-            var retryPrompt = prompt + "\n\n<tool-call-required>Return exactly one declared client write-tool call now. No prose, links, or cloud artifacts.</tool-call-required>";
-            answer = await ExecuteRawAsync(request, sessionId, retryPrompt, cancellationToken);
-            if (M365ToolProtocol.TryParse(answer, request.FunctionTools, out call))
-            {
-                if (!M365ToolProtocol.IsAllowedByChoice(request.ToolChoice, call!.Name))
-                    throw new InvalidOperationException("M365 Copilot forsøkte et verktøykall som tool_choice ikke tillater.");
-
-                return new OpenAiToolExecutionResult(string.Empty, call);
-            }
-
-            var fallbackWorkspace = CreateExplicitWriteFallbackWorkspace(request.Messages, workspace);
-            if (fallbackWorkspace != null)
-            {
-                var fallbackPrompt = workspace.Prompt +
-                    "\n\n<required-local-file-block>" +
-                    "The client tool transport was unavailable. Return only the complete replacement content for the explicitly requested local file in this exact form, without Markdown: " +
-                    $"\n===FILE: {fallbackWorkspace.Files.Keys.Single()}===\n<complete content>\n===END FILE===\n" +
-                    "Do not create a cloud document or return a link." +
-                    "</required-local-file-block>";
-                var fallbackAnswer = await ExecuteRawAsync(request, sessionId, fallbackPrompt, cancellationToken);
-                var writeResult = await _workspaceBridge.ApplyWritesAsync(fallbackAnswer, fallbackWorkspace, createBackups: false, cancellationToken);
-                if (writeResult.WrittenFiles.Count > 0)
-                    return new OpenAiToolExecutionResult(writeResult.Answer, null);
-            }
+            var recovered = await TryRecoverWriteCallAsync(request, sessionId, prompt, workspace, answer, cancellationToken);
+            if (recovered != null)
+                return recovered;
 
             throw new InvalidOperationException("M365 Copilot fullførte ikke det påkrevde lokale skriveverktøykallet.");
         }
@@ -155,6 +144,92 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
 
         return new OpenAiToolExecutionResult(answer, null);
     }
+
+    private async Task<OpenAiToolExecutionResult?> TryRecoverWriteCallAsync(
+        OpenAiChatRequest request, string sessionId, string prompt,
+        M365WorkspacePrompt workspace, string initialAnswer, CancellationToken cancellationToken)
+    {
+        var answer = initialAnswer;
+
+        // Første retry: be M365 om å returnere nøyaktig ett tool_call-gjerde.
+        _logger.LogWarning("M365 Copilot returnerte ikke et tool_call-gjerde. Svaret: {Answer}", Truncate(answer, 500));
+        var retryPrompt = prompt + "\n\n<tool-call-required>Return exactly one declared client write-tool call now. No prose, links, or cloud artifacts.</tool-call-required>";
+        answer = await ExecuteRawAsync(request, sessionId, retryPrompt, cancellationToken);
+        if (TryParseToolCall(answer, request, out var call))
+            return new OpenAiToolExecutionResult(string.Empty, call);
+
+        // Andre retry: enklere, mer eksplisitt prompt uten workspace-snapshot.
+        _logger.LogWarning("M365 Copilot returnerte ikke tool_call ved andre forsøk. Svaret: {Answer}", Truncate(answer, 500));
+        var simplePrompt = BuildSimplifiedRetryPrompt(request);
+        answer = await ExecuteRawAsync(request, sessionId, simplePrompt, cancellationToken);
+        if (TryParseToolCall(answer, request, out call))
+            return new OpenAiToolExecutionResult(string.Empty, call);
+
+        _logger.LogWarning("M365 Copilot returnerte ikke tool_call ved tredje forsøk. Svaret: {Answer}", Truncate(answer, 500));
+
+        // Fjerde forsøk: prøv å trekke ut filblokker direkte fra svaret.
+        var writeResult = await _workspaceBridge.ApplyWritesAsync(answer, workspace, createBackups: false, cancellationToken);
+        if (writeResult.WrittenFiles.Count > 0)
+            return new OpenAiToolExecutionResult(writeResult.Answer, null);
+
+        // Siste utvei: be M365 om filinnhold i ===FILE:-format uten verktøytransport.
+        var fallbackWorkspace = CreateExplicitWriteFallbackWorkspace(request.Messages, workspace);
+        if (fallbackWorkspace != null)
+        {
+            var fallbackPrompt = BuildFallbackPrompt(workspace, fallbackWorkspace);
+            var fallbackAnswer = await ExecuteRawAsync(request, sessionId, fallbackPrompt, cancellationToken);
+            var fallbackResult = await _workspaceBridge.ApplyWritesAsync(fallbackAnswer, fallbackWorkspace, createBackups: false, cancellationToken);
+            if (fallbackResult.WrittenFiles.Count > 0)
+                return new OpenAiToolExecutionResult(fallbackResult.Answer, null);
+        }
+
+        _logger.LogError("M365 Copilot fullførte ikke det påkrevde lokale skriveverktøykallet. Siste svar: {Answer}", Truncate(answer, 1000));
+        return null;
+    }
+
+    private static bool TryParseToolCall(string answer, OpenAiChatRequest request, out OpenAiProviderToolCall? call)
+    {
+        call = null;
+        if (!M365ToolProtocol.TryParse(answer, request.FunctionTools, out call))
+            return false;
+
+        if (!M365ToolProtocol.IsAllowedByChoice(request.ToolChoice, call!.Name))
+            throw new InvalidOperationException("M365 Copilot forsøkte et verktøykall som tool_choice ikke tillater.");
+
+        return true;
+    }
+
+    private static string BuildSimplifiedRetryPrompt(OpenAiChatRequest request)
+    {
+        var lastUserMessage = request.Messages.LastOrDefault(message =>
+            string.Equals(message.Role, OpenAiConstants.Roles.User, StringComparison.OrdinalIgnoreCase));
+        var userContext = !string.IsNullOrWhiteSpace(lastUserMessage?.Content)
+            ? $"USER REQUEST:\n{lastUserMessage.Content}\n\n"
+            : "";
+        var toolList = string.Join("\n", request.FunctionTools.Select(tool =>
+            $"- {tool.Name}: {tool.Description}"));
+        return $"{userContext}AVAILABLE TOOLS:\n{toolList}\n\n" +
+            "Return exactly one tool call in this fenced form. No other text:\n" +
+            "```tool_call\n" +
+            "{\"call_id\":\"call_your_unique_id\",\"name\":\"declared_function_name\",\"arguments\":{}}\n" +
+            "```";
+    }
+
+    private static string BuildFallbackPrompt(M365WorkspacePrompt workspace, M365WorkspacePrompt fallbackWorkspace)
+    {
+        var fileInstructions = string.Join("\n\n", fallbackWorkspace.Files.Select(file =>
+            $"===FILE: {file.Key}===\n<complete new file content>\n===END FILE==="));
+        return workspace.Prompt +
+            "\n\n<required-local-file-block>" +
+            "The client tool transport was unavailable. Return the complete replacement content " +
+            "for each of the following files in this exact form, without Markdown:\n\n" +
+            fileInstructions + "\n\n" +
+            "Do not create a cloud document or return a link." +
+            "</required-local-file-block>";
+    }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length > maxLength ? value[..maxLength] + "..." : value;
 
     private async Task<string> ExecuteCoreAsync(
         OpenAiChatRequest request,
@@ -316,7 +391,7 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         }
     }
 
-    private static async Task<string> ReadResponseAsync(ClientWebSocket socket, Func<string, CancellationToken, Task>? onChunk, CancellationToken cancellationToken, string requestId)
+    internal static async Task<string> ReadResponseAsync(WebSocket socket, Func<string, CancellationToken, Task>? onChunk, CancellationToken cancellationToken, string requestId)
     {
         var answer = string.Empty;
 
@@ -341,15 +416,28 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
                 if (type is 3 or 7)
                 {
                     if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
-                        throw new InvalidOperationException($"M365 Copilot avbrøt forespørselen (request {requestId}): {error.GetString()}");
-                    return answer;
+                        throw new M365CopilotUpstreamException("InvocationError", requestId, error.GetString());
+                    return RequireAnswer(answer, requestId);
                 }
 
                 if (type == 2)
                 {
                     if (root.TryGetProperty("item", out var item))
+                    {
+                        // The final item can contain an apology authored by BotConnection
+                        // together with result.value=InternalError. It is not model output.
+                        if (item.TryGetProperty("result", out var result) &&
+                            result.TryGetProperty("value", out var value) &&
+                            value.ValueKind == JsonValueKind.String &&
+                            !string.Equals(value.GetString(), "Success", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var detail = result.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+                                ? message.GetString() : null;
+                            throw new M365CopilotUpstreamException(value.GetString()!, requestId, detail);
+                        }
                         await AppendMessagesAsync(item, onChunk, cancellationToken, value => answer = Fold(answer, value).Answer, () => answer);
-                    return answer;
+                    }
+                    return RequireAnswer(answer, requestId);
                 }
 
                 if (type == 1 && root.TryGetProperty("target", out var target) && target.GetString() == "update" && root.TryGetProperty("arguments", out var arguments))
@@ -369,8 +457,13 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             }
         }
 
-        return answer;
+        throw new M365CopilotUpstreamException("ConnectionClosed", requestId, "The connection closed before the turn completed.");
     }
+
+    private static string RequireAnswer(string answer, string requestId) =>
+        !string.IsNullOrWhiteSpace(answer)
+            ? answer
+            : throw new M365CopilotUpstreamException("EmptyResponse", requestId, "The turn completed without an answer.");
 
     private static async Task AppendMessagesAsync(JsonElement container, Func<string, CancellationToken, Task>? onChunk, CancellationToken cancellationToken, Action<string> setAnswer, Func<string> getAnswer)
     {
@@ -408,13 +501,13 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         return (candidate, null);
     }
 
-    private static async Task SendAsync(ClientWebSocket socket, object value, CancellationToken cancellationToken) =>
+    private static async Task SendAsync(WebSocket socket, object value, CancellationToken cancellationToken) =>
         await SendTextAsync(socket, JsonSerializer.Serialize(value, JsonOptions) + RecordSeparator, cancellationToken);
 
-    private static async Task SendTextAsync(ClientWebSocket socket, string value, CancellationToken cancellationToken) =>
+    private static async Task SendTextAsync(WebSocket socket, string value, CancellationToken cancellationToken) =>
         await socket.SendAsync(Encoding.UTF8.GetBytes(value), WebSocketMessageType.Text, true, cancellationToken);
 
-    private static async Task<string> ReceiveTextAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private static async Task<string> ReceiveTextAsync(WebSocket socket, CancellationToken cancellationToken)
     {
         var buffer = new byte[8192];
         await using var content = new MemoryStream();
@@ -463,10 +556,10 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             root.GetProperty("tid").GetString() ?? throw new InvalidOperationException("JWT mangler tid."));
     }
 
-    private static string GetToneForModel(string model) => model.ToLowerInvariant() switch
+    internal static string GetToneForModel(string model) => model.ToLowerInvariant() switch
     {
-        "quick" => "Gpt_Quick",
-        "think-deeper" => "Gpt_Reasoning",
+        "quick" => "Chat",
+        "think-deeper" => "Reasoning",
         "claude" or "claude-sonnet" or "claude-sonnet-4.5" => "Claude_Sonnet",
         "claude-sonnet-think-deeper" => "Claude_Sonnet_Reasoning",
         "claude-opus" => "Claude_Opus",
@@ -491,23 +584,21 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         IReadOnlyList<OpenAiMessage> messages,
         M365WorkspacePrompt workspace)
     {
+        if (workspace.Files.Count == 0)
+            return null;
+
         var userText = string.Join("\n", messages
             .Where(message => string.Equals(message.Role, OpenAiConstants.Roles.User, StringComparison.OrdinalIgnoreCase))
             .Select(message => message.Content));
         var matchingFiles = workspace.Files
             .Where(file => userText.Contains(Path.GetFileName(file.Key), StringComparison.OrdinalIgnoreCase))
-            .Take(2)
-            .ToArray();
+            .Take(5)
+            .ToDictionary(file => file.Key, file => file.Value, StringComparer.OrdinalIgnoreCase);
 
-        // A fallback may replace exactly one existing file named by the user. This preserves the
-        // normal tool-first flow while making a cloud link unable to mutate project structure.
-        if (matchingFiles.Length != 1)
+        if (matchingFiles.Count == 0)
             return null;
 
-        return new M365WorkspacePrompt(
-            workspace.Prompt,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [matchingFiles[0].Key] = matchingFiles[0].Value },
-            WritesEnabled: true);
+        return new M365WorkspacePrompt(workspace.Prompt, matchingFiles, WritesEnabled: true);
     }
 
     private static string RemoveClientControlContext(string? content) =>

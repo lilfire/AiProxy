@@ -11,18 +11,42 @@ namespace AiProxy.Services.Providers;
 public static class M365ToolProtocol
 {
     private const string Fence = "tool_call";
-    private static readonly string[] FileChangeTerms = ["write", "update", "create", "modify", "edit", "patch", "skriv", "oppdater", "opprett", "endre"];
-    private static readonly string[] FileChangeSubjects = ["file", "fil", "readme", ".md", ".cs", ".json", "document", "dokument"];
-    private static readonly string[] WriteToolTerms = ["write", "update", "create", "modify", "edit", "patch", "apply", "skriv", "oppdater", "opprett", "endre"];
+    private static readonly string[] FileChangeTerms = ["write", "update", "create", "modify", "edit", "patch", "apply", "skriv", "oppdater", "opprett", "endre", "rette", "rett", "fikse"];
+    private static readonly string[] FileChangeSubjects = ["file", "fil", "filen", "readme", ".md", ".cs", ".json", "document", "dokument", "koden"];
+    private static readonly string[] WriteToolTerms = ["write", "update", "create", "modify", "edit", "patch", "apply", "skriv", "oppdater", "opprett", "endre", "rette", "rett", "fikse"];
 
     public static bool RequiresDeclaredWriteCall(IReadOnlyList<OpenAiMessage> messages, IReadOnlyList<OpenAiFunctionTool> tools)
     {
         if (!tools.Any(IsLikelyWriteTool))
             return false;
 
-        return messages.Any(message => string.Equals(message.Role, OpenAiConstants.Roles.User, StringComparison.OrdinalIgnoreCase) &&
-            ContainsAny(message.Content, FileChangeTerms) && ContainsAny(message.Content, FileChangeSubjects));
+        var userMessages = messages
+            .Where(m => string.Equals(m.Role, OpenAiConstants.Roles.User, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (userMessages.Count == 0)
+            return false;
+
+        // Sjekk den siste brukermeldingen. Hvis den er kort (< 200 tegn) og ikke
+        // matcher, sjekk også den forrige — men bare hvis den også er kort. Dette
+        // håndterer "lag plan for å rette filen" → "utfør" uten å treffe på
+        // systemprompter som OpenCode sender som user-rollen (> 500 tegn).
+        var last = userMessages[^1].Content;
+        if (!string.IsNullOrWhiteSpace(last) && MatchFileChange(last))
+            return true;
+
+        if (last != null && last.Length < 200 && userMessages.Count >= 2)
+        {
+            var previous = userMessages[^2].Content;
+            if (!string.IsNullOrWhiteSpace(previous) && previous.Length < 200 && MatchFileChange(previous))
+                return true;
+        }
+
+        return false;
     }
+
+    private static bool MatchFileChange(string content) =>
+        ContainsAny(content, FileChangeTerms) && ContainsAny(content, FileChangeSubjects);
 
     public static string AppendInstruction(string prompt, IReadOnlyList<OpenAiFunctionTool> tools, JsonElement? toolChoice,
         IReadOnlyList<OpenAiToolCall> previousCalls, IReadOnlyList<OpenAiToolResult> results)
@@ -281,7 +305,7 @@ public static class M365ToolProtocol
             !string.IsNullOrWhiteSpace(value = property.GetString() ?? string.Empty);
     }
 
-    private static bool IsLikelyWriteTool(OpenAiFunctionTool tool) =>
+    internal static bool IsLikelyWriteTool(OpenAiFunctionTool tool) =>
         ContainsAny(tool.Name, WriteToolTerms) || ContainsAny(tool.Description, WriteToolTerms);
 
     private static bool ContainsAny(string? value, IEnumerable<string> terms) =>

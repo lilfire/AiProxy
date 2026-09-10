@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Text.Json;
 using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
 using AiProxy.Services;
@@ -38,10 +39,42 @@ public sealed class ExceptionHandlingMiddleware
         {
             await HandleInvalidImageAsync(context, ex);
         }
+        catch (M365CopilotUpstreamException ex)
+        {
+            await HandleM365UpstreamErrorAsync(context, ex);
+        }
         catch (Exception ex)
         {
             await HandleExceptionAsync(context, ex);
         }
+    }
+
+    private async Task HandleM365UpstreamErrorAsync(HttpContext context, M365CopilotUpstreamException ex)
+    {
+        _logger.LogWarning(ex, "M365 Copilot-feil {Code}, request {RequestId}", ex.Code, ex.RequestId);
+        var response = new OpenAiErrorResponse(new OpenAiError
+        {
+            Message = $"M365 Copilot returned {ex.Code}. Request ID: {ex.RequestId}.",
+            Type = OpenAiConstants.ErrorType,
+            Code = "m365_upstream_error"
+        });
+
+        if (context.Response.HasStarted)
+        {
+            if (context.Response.ContentType?.StartsWith("text/event-stream", StringComparison.OrdinalIgnoreCase) != true)
+                ExceptionDispatchInfo.Capture(ex).Throw();
+
+            object streamError = context.Request.Path.Value?.EndsWith("/responses", StringComparison.OrdinalIgnoreCase) == true
+                ? new { type = "error", code = response.Error.Code, message = response.Error.Message, param = (string?)null }
+                : response;
+            var json = JsonSerializer.Serialize(streamError, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            await context.Response.WriteAsync($"event: error\ndata: {json}\n\n", context.RequestAborted);
+            await context.Response.Body.FlushAsync(context.RequestAborted);
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await WriteErrorResponseAsync(context, response);
     }
 
     private Task HandleQuotaExceededAsync(HttpContext context, QuotaExceededException ex)
