@@ -18,4 +18,9 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="8.1.1" />
   </ItemGroup>
 
+  <Target Name="InstallOpenCodePlugin" AfterTargets="Build">
+    <Exec Command="powershell -ExecutionPolicy Bypass -File $(SolutionDir)scripts\Install-OpenCodePlugin.ps1"
+          Condition="Exists('$(SolutionDir)scripts\Install-OpenCodePlugin.ps1')" />
+  </Target>
+
 </Project>

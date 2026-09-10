@@ -57,6 +57,14 @@ dotnet restore AiProxy.slnx
 dotnet build AiProxy.slnx
 ```
 
+Bygging kopierer automatisk AiProxy-pluginen til OpenCode. Du kan også kjøre scriptet manuelt:
+
+```powershell
+.\scripts\Install-OpenCodePlugin.ps1
+```
+
+Pluginen gir OpenCode dynamisk modelliste og sesjonsgjenbruk mot AiProxy.
+
 Start tjenesten:
 
 ```powershell
@@ -304,7 +312,9 @@ AiProxy.slnx
 |  |- Routes/           API- og admin-endepunkter
 |  |- Services/         Providers, sesjoner, logging og prosesskjøring
 |  `- Validators/       FluentValidation-validatorer
-`- AiProxy.Tests/       MSTest-enhetstester
+|- AiProxy.Tests/       MSTest-enhetstester
+|- plugins/             OpenCode-plugin for AiProxy-integrasjon
+`- scripts/             Installasjons- og vedlikeholdsscript
 ```
 
 ## Sikkerhet og drift
