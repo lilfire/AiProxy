@@ -11,7 +11,7 @@ namespace AiProxy.Services;
 /// Reads authenticated subscription quotas from the locally installed provider CLIs.
 /// Values are cached briefly so opening the administration UI does not repeatedly call an account API.
 /// </summary>
-public sealed class ProviderQuotaService : IProviderQuotaService
+public sealed class ProviderQuotaService : IProviderQuotaService, IQuotaUpdateNotifier
 {
     private static readonly TimeSpan SuccessCacheDuration = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FailureCacheDuration = TimeSpan.FromSeconds(10);
@@ -22,12 +22,51 @@ public sealed class ProviderQuotaService : IProviderQuotaService
     private readonly ILogger<ProviderQuotaService> _logger;
     private readonly ConcurrentDictionary<string, CachedQuota> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _listenersGate = new();
+    private readonly Dictionary<long, Action<string, ProviderQuotaSnapshot>> _listeners = [];
+    private long _nextListenerId;
 
     public ProviderQuotaService(IHttpClientFactory httpClientFactory, ShellCommandRunner commandRunner, ILogger<ProviderQuotaService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _commandRunner = commandRunner;
         _logger = logger;
+    }
+
+    public IDisposable Subscribe(Action<string, ProviderQuotaSnapshot> listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        long listenerId;
+        lock (_listenersGate)
+        {
+            listenerId = ++_nextListenerId;
+            _listeners.Add(listenerId, listener);
+        }
+        return new QuotaSubscription(this, listenerId);
+    }
+
+    private void Unsubscribe(long listenerId)
+    {
+        lock (_listenersGate)
+            _listeners.Remove(listenerId);
+    }
+
+    private void NotifyListeners(string providerName, ProviderQuotaSnapshot snapshot)
+    {
+        Action<string, ProviderQuotaSnapshot>[] listeners;
+        lock (_listenersGate)
+            listeners = _listeners.Values.ToArray();
+        foreach (var listener in listeners)
+        {
+            try { listener(providerName, snapshot); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Kunne ikke varsle kvote-listener for {Provider}", providerName); }
+        }
+    }
+
+    private sealed class QuotaSubscription(ProviderQuotaService owner, long listenerId) : IDisposable
+    {
+        private ProviderQuotaService? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Unsubscribe(listenerId);
     }
 
     public ProviderQuotaSnapshot? GetCachedSnapshot(string providerName)
@@ -64,6 +103,7 @@ public sealed class ProviderQuotaService : IProviderQuotaService
             };
             var duration = snapshot.Error == null ? SuccessCacheDuration : FailureCacheDuration;
             _cache[providerName] = new CachedQuota(snapshot, now.Add(duration));
+            NotifyListeners(providerName, snapshot);
             return snapshot;
         }
         finally

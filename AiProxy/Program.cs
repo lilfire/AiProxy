@@ -29,8 +29,10 @@ builder.Services.AddSingleton<IExecutablePathResolver, ExecutablePathResolver>()
 builder.Services.AddSingleton<ShellCommandRunner>();
 builder.Services.AddSingleton<ProviderSessionStore>();
 builder.Services.AddSingleton<IProviderUsageStore, ProviderUsageStore>();
+builder.Services.AddSingleton<IUsageUpdateNotifier>(sp => (IUsageUpdateNotifier)sp.GetRequiredService<IProviderUsageStore>());
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IProviderQuotaService, ProviderQuotaService>();
+builder.Services.AddSingleton<IQuotaUpdateNotifier>(sp => (IQuotaUpdateNotifier)sp.GetRequiredService<IProviderQuotaService>());
 builder.Services.AddHostedService<ProviderQuotaRefreshService>();
 builder.Services.AddSingleton<M365CopilotSessionStore>();
 builder.Services.AddSingleton<M365CopilotTokenProvider>();

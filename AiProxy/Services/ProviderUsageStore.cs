@@ -7,9 +7,12 @@ namespace AiProxy.Services;
 /// In-memory request usage for the local proxy. Provider CLIs do not expose a
 /// common, reliable token or subscription-quota API, so those values are not inferred here.
 /// </summary>
-public sealed class ProviderUsageStore : IProviderUsageStore
+public sealed class ProviderUsageStore : IProviderUsageStore, IUsageUpdateNotifier
 {
     private readonly ConcurrentDictionary<string, ProviderUsageCounter> _counters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _listenersGate = new();
+    private readonly Dictionary<long, Action<string, ProviderUsageSnapshot>> _listeners = [];
+    private long _nextListenerId;
 
     public void RecordCompletedRequest(string providerName)
     {
@@ -17,12 +20,49 @@ public sealed class ProviderUsageStore : IProviderUsageStore
             return;
 
         _counters.GetOrAdd(providerName, _ => new ProviderUsageCounter()).Record(DateTimeOffset.UtcNow);
+        NotifyListeners(providerName, GetSnapshot(providerName));
     }
 
     public ProviderUsageSnapshot GetSnapshot(string providerName) =>
         _counters.TryGetValue(providerName, out var counter)
             ? counter.GetSnapshot(DateTimeOffset.UtcNow)
             : new ProviderUsageSnapshot(0, 0, null);
+
+    public IDisposable Subscribe(Action<string, ProviderUsageSnapshot> listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        long listenerId;
+        lock (_listenersGate)
+        {
+            listenerId = ++_nextListenerId;
+            _listeners.Add(listenerId, listener);
+        }
+        return new UsageSubscription(this, listenerId);
+    }
+
+    private void Unsubscribe(long listenerId)
+    {
+        lock (_listenersGate)
+            _listeners.Remove(listenerId);
+    }
+
+    private void NotifyListeners(string providerName, ProviderUsageSnapshot snapshot)
+    {
+        Action<string, ProviderUsageSnapshot>[] listeners;
+        lock (_listenersGate)
+            listeners = _listeners.Values.ToArray();
+        foreach (var listener in listeners)
+        {
+            try { listener(providerName, snapshot); }
+            catch { /* swallow listener errors */ }
+        }
+    }
+
+    private sealed class UsageSubscription(ProviderUsageStore owner, long listenerId) : IDisposable
+    {
+        private ProviderUsageStore? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Unsubscribe(listenerId);
+    }
 
     private sealed class ProviderUsageCounter
     {

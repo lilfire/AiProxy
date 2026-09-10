@@ -7,6 +7,11 @@ public interface IProviderUsageStore
     ProviderUsageSnapshot GetSnapshot(string providerName);
 }
 
+public interface IUsageUpdateNotifier
+{
+    IDisposable Subscribe(Action<string, ProviderUsageSnapshot> listener);
+}
+
 public sealed record ProviderUsageSnapshot(int CompletedRequests, int CompletedRequestsLast24Hours, DateTimeOffset? LastUsedAt);
 
 /// <summary>One rolling subscription-quota window reported by a provider CLI.</summary>
@@ -23,4 +28,9 @@ public interface IProviderQuotaService
     /// <summary>Returns the last background-refreshed value without starting an external command.</summary>
     ProviderQuotaSnapshot? GetCachedSnapshot(string providerName);
     Task<ProviderQuotaSnapshot?> GetSnapshotAsync(string providerName, CancellationToken cancellationToken = default);
+}
+
+public interface IQuotaUpdateNotifier
+{
+    IDisposable Subscribe(Action<string, ProviderQuotaSnapshot> listener);
 }

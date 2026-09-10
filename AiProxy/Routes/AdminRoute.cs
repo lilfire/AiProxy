@@ -31,6 +31,8 @@ public static class AdminRoute
         admin.MapGet("/logs/stream", StreamLogsAsync);
         admin.MapGet("/sessions", (ISessionHistoryStore sessionHistory) => Results.Ok(sessionHistory.GetSnapshot()));
         admin.MapGet("/sessions/stream", StreamSessionsAsync);
+        admin.MapGet("/quota/stream", StreamQuotaAsync);
+        admin.MapGet("/usage/stream", StreamUsageAsync);
         return app;
     }
 
@@ -110,4 +112,87 @@ public static class AdminRoute
             channel.Writer.TryComplete();
         }
     }
+
+    private static async Task StreamQuotaAsync(HttpContext context, IQuotaUpdateNotifier notifier, IProviderQuotaService quotaService, IAdminService adminService, CancellationToken cancellationToken)
+    {
+        context.Response.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache";
+
+        var channel = Channel.CreateUnbounded<QuotaUpdateEvent>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+        using var subscription = notifier.Subscribe((providerName, snapshot) =>
+            channel.Writer.TryWrite(new QuotaUpdateEvent(providerName, snapshot)));
+
+        try
+        {
+            var statuses = await adminService.GetProviderStatusesAsync(cancellationToken);
+            foreach (var status in statuses)
+            {
+                if (status.Quota is { } quota)
+                {
+                    var evt = new QuotaUpdateEvent(status.Name, quota);
+                    var json = JsonSerializer.Serialize(evt, JsonOptions);
+                    await context.Response.WriteAsync($"event: quota\ndata: {json}\n\n", cancellationToken);
+                }
+            }
+            await context.Response.Body.FlushAsync(cancellationToken);
+
+            await foreach (var evt in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                var json = JsonSerializer.Serialize(evt, JsonOptions);
+                await context.Response.WriteAsync($"event: quota\ndata: {json}\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Nettleseren lukket kvotestrømmen.
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private sealed record QuotaUpdateEvent(string ProviderName, ProviderQuotaSnapshot Quota);
+
+    private static async Task StreamUsageAsync(HttpContext context, IUsageUpdateNotifier notifier, IProviderUsageStore usageStore, IAdminService adminService, CancellationToken cancellationToken)
+    {
+        context.Response.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache";
+
+        var channel = Channel.CreateUnbounded<UsageUpdateEvent>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+        using var subscription = notifier.Subscribe((providerName, snapshot) =>
+            channel.Writer.TryWrite(new UsageUpdateEvent(providerName, snapshot)));
+
+        try
+        {
+            var statuses = await adminService.GetProviderStatusesAsync(cancellationToken);
+            foreach (var status in statuses)
+            {
+                var evt = new UsageUpdateEvent(status.Name, status.Usage);
+                var json = JsonSerializer.Serialize(evt, JsonOptions);
+                await context.Response.WriteAsync($"event: usage\ndata: {json}\n\n", cancellationToken);
+            }
+            await context.Response.Body.FlushAsync(cancellationToken);
+
+            await foreach (var evt in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                var json = JsonSerializer.Serialize(evt, JsonOptions);
+                await context.Response.WriteAsync($"event: usage\ndata: {json}\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Nettleseren lukket bruksstrømmen.
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+    }
+
+    private sealed record UsageUpdateEvent(string ProviderName, ProviderUsageSnapshot Usage);
 }
