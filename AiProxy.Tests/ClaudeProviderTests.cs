@@ -469,7 +469,7 @@ public class ClaudeProviderTests
 
     private ClaudeProvider CreateProvider(ShellCommandRunner shellRunner, ITodoSnapshotStore todoStore)
     {
-        return new ClaudeProvider(NullLogger<ClaudeProvider>.Instance, shellRunner, new ProviderSessionStore(), new PromptFileWriter(), todoStore);
+        return new ClaudeProvider(NullLogger<ClaudeProvider>.Instance, shellRunner, new ProviderSessionStore(), new PromptFileWriter(), todoStore, new ImageInputResolver());
     }
 
     private ClaudeProvider CreateProvider()

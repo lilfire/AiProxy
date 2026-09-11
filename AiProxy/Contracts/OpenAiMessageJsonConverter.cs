@@ -24,7 +24,34 @@ public sealed class OpenAiMessageJsonConverter : JsonConverter<OpenAiMessage>
     {
         writer.WriteStartObject();
         writer.WriteString("role", value.Role);
-        writer.WriteString("content", value.Content);
+        if (value.Images.Count == 0)
+        {
+            writer.WriteString("content", value.Content);
+        }
+        else
+        {
+            writer.WritePropertyName("content");
+            writer.WriteStartArray();
+            if (!string.IsNullOrWhiteSpace(value.Content))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "text");
+                writer.WriteString("text", value.Content);
+                writer.WriteEndObject();
+            }
+
+            foreach (var image in value.Images)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "image_url");
+                writer.WritePropertyName("image_url");
+                writer.WriteStartObject();
+                writer.WriteString("url", image.Url);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
         if (!string.IsNullOrWhiteSpace(value.ToolCallId))
             writer.WriteString("tool_call_id", value.ToolCallId);
         if (value.ToolCalls != null)

@@ -13,22 +13,26 @@ public sealed class AigravityProvider : IChatProvider
     private readonly ProviderSessionStore _sessionStore;
     private readonly IModelIdCache _modelIdCache;
     private readonly IPromptFileWriter _promptFileWriter;
+    private readonly IImageInputResolver _imageInputResolver;
 
     public AigravityProvider(
         ILogger<AigravityProvider> logger,
         ShellCommandRunner commandRunner,
         ProviderSessionStore sessionStore,
         IModelIdCache modelIdCache,
-        IPromptFileWriter promptFileWriter)
+        IPromptFileWriter promptFileWriter,
+        IImageInputResolver imageInputResolver)
     {
         _logger = logger;
         _commandRunner = commandRunner;
         _sessionStore = sessionStore;
         _modelIdCache = modelIdCache;
         _promptFileWriter = promptFileWriter;
+        _imageInputResolver = imageInputResolver;
     }
 
     public string Name => OpenAiConstants.Providers.Aigravity;
+    public bool SupportsImages => true;
 
     public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default)
     {
@@ -54,7 +58,8 @@ public sealed class AigravityProvider : IChatProvider
 
     public async Task<string> ExecuteAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
     {
-        var prompt = BuildPrompt(request.Messages);
+        await using var images = await _imageInputResolver.ResolveAsync(request.Messages.SelectMany(message => message.Images), cancellationToken);
+        var prompt = ImagePromptBuilder.Build(request.Messages, images.Paths);
         var modelId = NormalizeModelId(request.Model);
         var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "agy", prompt, cancellationToken);
 
@@ -181,15 +186,4 @@ public sealed class AigravityProvider : IChatProvider
         return arguments;
     }
 
-    private string BuildPrompt(List<OpenAiMessage> messages)
-    {
-        var builder = new System.Text.StringBuilder();
-
-        foreach (var message in messages)
-        {
-            builder.Append($"{message.Role}: {message.Content ?? string.Empty}\n\n");
-        }
-
-        return builder.ToString().Trim();
-    }
 }

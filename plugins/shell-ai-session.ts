@@ -76,7 +76,12 @@ export default (async () =>
                 {
                     provider.models[model.id] = {
                         id: model.id,
-                        name: model.id
+                        name: model.id,
+                        attachment: true,
+                        modalities: {
+                            input: ["text", "image"],
+                            output: ["text"]
+                        }
                     }
                 }
             }

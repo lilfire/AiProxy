@@ -15,6 +15,7 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
 
     public OpenAiChatRequest MapToChatRequest(OpenAiResponsesRequest request)
     {
+        _logger.LogInformation("Responses input-struktur: {InputStructure}", DescribeInputStructure(request.Input));
         var messages = ExtractMessages(request.Input);
 
         return new OpenAiChatRequest
@@ -150,13 +151,43 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
         if (type == OpenAiConstants.ResponseInputTypes.InputText)
         {
             var text = GetStringProperty(item, "text") ?? string.Empty;
+            if (IsImageDataUrl(text))
+                return new OpenAiMessage(OpenAiConstants.Roles.User, null)
+                {
+                    Images = [new OpenAiImageInput(text)]
+                };
             return new OpenAiMessage(OpenAiConstants.Roles.User, text);
         }
 
-        if (type == OpenAiConstants.ResponseInputTypes.Message)
+        // Some OpenAI-compatible clients put content parts directly in input rather than
+        // wrapping them in a type=message item. Preserve a standalone image part so provider
+        // image routing sees the attachment instead of silently treating it as empty text.
+        if (type is OpenAiConstants.ResponseInputTypes.InputImage or "image_url")
         {
-            return JsonSerializer.Deserialize<OpenAiMessage>(item.GetRawText())
+            var imageUrl = GetImageUrl(item);
+            return new OpenAiMessage(OpenAiConstants.Roles.User, null)
+            {
+                Images = string.IsNullOrWhiteSpace(imageUrl) ? [] : [new OpenAiImageInput(imageUrl)]
+            };
+        }
+
+        if (type is "input_file" or "image_file")
+        {
+            var imageUrl = GetImageFileData(item);
+            return new OpenAiMessage(OpenAiConstants.Roles.User, null)
+            {
+                Images = string.IsNullOrWhiteSpace(imageUrl) ? [] : [new OpenAiImageInput(imageUrl)]
+            };
+        }
+
+        // OpenCode's Responses adapter emits { role, content } directly and omits
+        // type="message". Treat it as a message so multimodal content is not reduced to text.
+        if (type == OpenAiConstants.ResponseInputTypes.Message || item.TryGetProperty("role", out _))
+        {
+            var message = JsonSerializer.Deserialize<OpenAiMessage>(item.GetRawText())
                 ?? new OpenAiMessage(OpenAiConstants.Roles.User, string.Empty);
+            PromoteImageDataUrlsInContent(item, message);
+            return message;
         }
 
         var fallbackContent = GetStringProperty(item, "text")
@@ -174,6 +205,80 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
             return null;
 
         return property.GetString();
+    }
+
+    private static string? GetImageUrl(JsonElement item)
+    {
+        if (!item.TryGetProperty("image_url", out var imageUrl))
+            return GetStringProperty(item, "url");
+
+        return imageUrl.ValueKind switch
+        {
+            JsonValueKind.String => imageUrl.GetString(),
+            JsonValueKind.Object when imageUrl.TryGetProperty("url", out var url) && url.ValueKind == JsonValueKind.String => url.GetString(),
+            _ => null
+        };
+    }
+
+    private static bool IsImageDataUrl(string? value) =>
+        value?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static void PromoteImageDataUrlsInContent(JsonElement item, OpenAiMessage message)
+    {
+        if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var part in content.EnumerateArray())
+        {
+            var text = GetStringProperty(part, "text");
+            if (IsImageDataUrl(text))
+                message.Images.Add(new OpenAiImageInput(text!));
+        }
+    }
+
+    private static string? GetImageFileData(JsonElement item)
+    {
+        var data = GetStringProperty(item, "file_data") ?? GetStringProperty(item, "data") ?? GetStringProperty(item, "url");
+        if (data?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) == true)
+            return data;
+
+        var fileName = GetStringProperty(item, "filename") ?? GetStringProperty(item, "file_name");
+        if (data != null && !data.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && fileName != null)
+        {
+            var mediaType = Path.GetExtension(fileName).ToLowerInvariant() switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".webp" => "image/webp",
+                _ => null
+            };
+            if (mediaType != null)
+                return $"data:{mediaType};base64,{data}";
+        }
+
+        return null;
+    }
+
+    private static string DescribeInputStructure(object? input)
+    {
+        if (input is not JsonElement element)
+            return input?.GetType().Name ?? "null";
+
+        return DescribeElement(element);
+    }
+
+    private static string DescribeElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Array => "[" + string.Join(",", element.EnumerateArray().Take(8).Select(DescribeElement)) + "]",
+            JsonValueKind.Object => "{" + string.Join(",", element.EnumerateObject().Take(12).Select(property =>
+                property.Name is "image_url" or "file_data" or "data" or "url" ? property.Name :
+                property.Name == "content" ? "content:" + DescribeElement(property.Value) :
+                property.Name == "type" && property.Value.ValueKind == JsonValueKind.String ? "type=" + property.Value.GetString() : property.Name)) + "}",
+            JsonValueKind.String => "text",
+            _ => element.ValueKind.ToString()
+        };
     }
 
     private string ExtractTextFromMessageContent(JsonElement item)

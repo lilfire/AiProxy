@@ -36,6 +36,7 @@ builder.Services.AddSingleton<IQuotaUpdateNotifier>(sp => (IQuotaUpdateNotifier)
 builder.Services.AddHostedService<ProviderQuotaRefreshService>();
 builder.Services.AddSingleton<M365CopilotSessionStore>();
 builder.Services.AddSingleton<M365CopilotTokenProvider>();
+builder.Services.AddSingleton<IM365CopilotBrowserClient, M365CopilotBrowserClient>();
 builder.Services.AddSingleton<M365CopilotWorkspaceBridge>();
 builder.Services.AddSingleton<IModelIdCache, ModelIdCache>();
 builder.Services.AddSingleton<IPromptFileWriter, PromptFileWriter>();

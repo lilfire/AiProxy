@@ -119,6 +119,60 @@ public class ResponsesRequestMapperTests
     }
 
     [TestMethod]
+    public void MapToChatRequest_with_opencode_message_without_type_preserves_the_image()
+    {
+        var element = JsonSerializer.SerializeToElement(new[]
+        {
+            new
+            {
+                role = "user",
+                content = new object[]
+                {
+                    new { type = "input_text", text = "Beskriv bildet" },
+                    new { type = "input_image", image_url = new { url = "data:image/png;base64,iVBORw0KGgo=" } }
+                }
+            }
+        });
+
+        var result = CreateMapper().MapToChatRequest(new OpenAiResponsesRequest { Model = "test-model", Input = element });
+
+        Assert.AreEqual("user", result.Messages[0].Role);
+        Assert.AreEqual("Beskriv bildet", result.Messages[0].Content);
+        Assert.AreEqual(1, result.Messages[0].Images.Count);
+    }
+
+    [TestMethod]
+    public void MapToChatRequest_with_standalone_input_image_preserves_the_image()
+    {
+        var element = JsonSerializer.SerializeToElement(new object[]
+        {
+            new { type = "input_text", text = "Beskriv bildet" },
+            new { type = "input_image", image_url = new { url = "data:image/png;base64,iVBORw0KGgo=" } }
+        });
+
+        var result = CreateMapper().MapToChatRequest(new OpenAiResponsesRequest { Model = "test-model", Input = element });
+
+        Assert.AreEqual(2, result.Messages.Count);
+        Assert.AreEqual("Beskriv bildet", result.Messages[0].Content);
+        Assert.AreEqual(1, result.Messages[1].Images.Count);
+        Assert.AreEqual("data:image/png;base64,iVBORw0KGgo=", result.Messages[1].Images[0].Url);
+    }
+
+    [TestMethod]
+    public void MapToChatRequest_with_standalone_image_file_preserves_the_image()
+    {
+        var element = JsonSerializer.SerializeToElement(new[]
+        {
+            new { type = "input_file", filename = "clipboard.png", file_data = "iVBORw0KGgo=" }
+        });
+
+        var result = CreateMapper().MapToChatRequest(new OpenAiResponsesRequest { Model = "test-model", Input = element });
+
+        Assert.AreEqual(1, result.Messages[0].Images.Count);
+        Assert.AreEqual("data:image/png;base64,iVBORw0KGgo=", result.Messages[0].Images[0].Url);
+    }
+
+    [TestMethod]
     public void MapToChatRequest_with_empty_input_adds_empty_user_message()
     {
         var mapper = CreateMapper();

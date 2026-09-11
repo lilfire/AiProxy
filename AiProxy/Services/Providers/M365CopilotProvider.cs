@@ -51,26 +51,30 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
     private readonly M365CopilotWorkspaceBridge _workspaceBridge;
     private readonly IRuntimeSettings _settings;
     private readonly ILogger<M365CopilotProvider> _logger;
+    private readonly IImageInputResolver _imageInputResolver;
+    private readonly IM365CopilotBrowserClient _browserClient;
 
     public M365CopilotProvider(
         M365CopilotTokenProvider tokenProvider,
         M365CopilotSessionStore sessionStore,
         M365CopilotWorkspaceBridge workspaceBridge,
         IRuntimeSettings settings,
-        ILogger<M365CopilotProvider> logger)
+        ILogger<M365CopilotProvider> logger,
+        IImageInputResolver imageInputResolver,
+        IM365CopilotBrowserClient browserClient)
     {
         _tokenProvider = tokenProvider;
         _sessionStore = sessionStore;
         _workspaceBridge = workspaceBridge;
         _settings = settings;
         _logger = logger;
+        _imageInputResolver = imageInputResolver;
+        _browserClient = browserClient;
     }
 
     public string Name => OpenAiConstants.Providers.M365Copilot;
 
-    // Desktopklienten bruker en separat GPT-V/artifact-opplasting som ikke er del av
-    // den rekonstruerte Chathub-kontrakten. Ikke send bilder som tekst/base64 her.
-    public bool SupportsImages => false;
+    public bool SupportsImages => true;
 
     public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<string>>(_settings.Current.M365Copilot.Enabled ? ModelIds : Array.Empty<string>());
@@ -89,6 +93,12 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
 
     public async Task<OpenAiToolExecutionResult> ExecuteWithToolsAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
     {
+        // OpenCode always supplies its client tools, including for a simple image question.
+        // An image turn must return the model's answer; it must not be rejected merely because
+        // the model did not invoke an unrelated workspace-write tool.
+        if (request.Messages.Any(message => message.Images.Count > 0))
+            return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
+
         if (request.FunctionTools.Count == 0)
             return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
 
@@ -261,6 +271,15 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
     {
         if (!_settings.Current.M365Copilot.Enabled)
             throw new InvalidOperationException("M365 Copilot-provideren er deaktivert i konfigurasjonen.");
+
+        var containsImages = request.Messages.Any(message => message.Images.Count > 0);
+        if (containsImages || _browserClient.UsesBrowserSession(clientSessionId))
+        {
+            await using var browserImages = await _imageInputResolver.ResolveAsync(
+                request.Messages.SelectMany(message => message.Images), cancellationToken);
+            _logger.LogInformation("Kjører M365 Copilot i den dedikerte nettleserprofilen for sesjon {Session}", clientSessionId);
+            return await _browserClient.ExecuteAsync(clientSessionId, prompt, browserImages.Paths, cancellationToken);
+        }
 
         var token = await _tokenProvider.GetTokenAsync(cancellationToken);
         var claims = GetTokenClaims(token);

@@ -10,6 +10,7 @@ public sealed class ClaudeProvider : IChatProvider
     private readonly ProviderSessionStore _sessionStore;
     private readonly IPromptFileWriter _promptFileWriter;
     private readonly ITodoSnapshotStore _todoStore;
+    private readonly IImageInputResolver _imageInputResolver;
 
     private readonly IReadOnlyList<string> _defaultModelIds;
     private readonly string _executableName = "claude";
@@ -20,13 +21,15 @@ public sealed class ClaudeProvider : IChatProvider
         ShellCommandRunner commandRunner,
         ProviderSessionStore sessionStore,
         IPromptFileWriter promptFileWriter,
-        ITodoSnapshotStore todoStore)
+        ITodoSnapshotStore todoStore,
+        IImageInputResolver imageInputResolver)
     {
         _logger = logger;
         _commandRunner = commandRunner;
         _sessionStore = sessionStore;
         _promptFileWriter = promptFileWriter;
         _todoStore = todoStore;
+        _imageInputResolver = imageInputResolver;
         _defaultModelIds = new List<string>
         {
             "opus",
@@ -37,6 +40,7 @@ public sealed class ClaudeProvider : IChatProvider
     }
 
     public string Name => OpenAiConstants.Providers.Claude;
+    public bool SupportsImages => true;
 
     public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default)
     {
@@ -66,7 +70,8 @@ public sealed class ClaudeProvider : IChatProvider
         Func<string, CancellationToken, Task> onChunk,
         CancellationToken cancellationToken = default)
     {
-        var prompt = BuildPrompt(request.Messages);
+        await using var images = await _imageInputResolver.ResolveAsync(request.Messages.SelectMany(message => message.Images), cancellationToken);
+        var prompt = ImagePromptBuilder.Build(request.Messages, images.Paths);
         var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, _promptFilePrefix, prompt, cancellationToken);
 
         try
@@ -197,15 +202,4 @@ public sealed class ClaudeProvider : IChatProvider
              normalizedMessage.Contains("finnes ikke"));
     }
 
-    private string BuildPrompt(List<OpenAiMessage> messages)
-    {
-        var builder = new StringBuilder();
-
-        foreach (var message in messages)
-        {
-            builder.Append($"{message.Role}: {message.Content ?? string.Empty}\n\n");
-        }
-
-        return builder.ToString().Trim();
-    }
 }

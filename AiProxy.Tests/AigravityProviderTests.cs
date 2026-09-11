@@ -125,7 +125,7 @@ public class AigravityProviderTests
         var modelIdCache = new ModelIdCache(new TestRuntimeSettings());
         var promptFileWriter = new PromptFileWriter();
 
-        return new AigravityProvider(logger, shellRunner, sessionStore, modelIdCache, promptFileWriter);
+        return new AigravityProvider(logger, shellRunner, sessionStore, modelIdCache, promptFileWriter, new ImageInputResolver());
     }
 
     private static IOptions<AiProxyOptions> CreateOptions()

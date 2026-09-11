@@ -13,22 +13,26 @@ public sealed partial class GrokProvider : IChatProvider
     private readonly ProviderSessionStore _sessionStore;
     private readonly IModelIdCache _modelIdCache;
     private readonly IPromptFileWriter _promptFileWriter;
+    private readonly IImageInputResolver _imageInputResolver;
 
     public GrokProvider(
         ILogger<GrokProvider> logger,
         ShellCommandRunner commandRunner,
         ProviderSessionStore sessionStore,
         IModelIdCache modelIdCache,
-        IPromptFileWriter promptFileWriter)
+        IPromptFileWriter promptFileWriter,
+        IImageInputResolver imageInputResolver)
     {
         _logger = logger;
         _commandRunner = commandRunner;
         _sessionStore = sessionStore;
         _modelIdCache = modelIdCache;
         _promptFileWriter = promptFileWriter;
+        _imageInputResolver = imageInputResolver;
     }
 
     public string Name => OpenAiConstants.Providers.Grok;
+    public bool SupportsImages => true;
 
     public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default)
     {
@@ -54,7 +58,8 @@ public sealed partial class GrokProvider : IChatProvider
 
     public async Task<string> ExecuteAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
     {
-        var prompt = BuildPrompt(request.Messages);
+        await using var images = await _imageInputResolver.ResolveAsync(request.Messages.SelectMany(message => message.Images), cancellationToken);
+        var prompt = ImagePromptBuilder.Build(request.Messages, images.Paths);
         var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "grok", prompt, cancellationToken);
 
         try
@@ -163,18 +168,6 @@ public sealed partial class GrokProvider : IChatProvider
         }
 
         return models;
-    }
-
-    private string BuildPrompt(List<OpenAiMessage> messages)
-    {
-        var builder = new System.Text.StringBuilder();
-
-        foreach (var message in messages)
-        {
-            builder.Append($"{message.Role}: {message.Content ?? string.Empty}\n\n");
-        }
-
-        return builder.ToString().Trim();
     }
 
     private Match MatchGrokModelLine(string line)

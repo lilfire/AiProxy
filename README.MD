@@ -14,7 +14,7 @@ Prosjektet er bygget med ASP.NET Core og .NET 9. Standardadressen er `http://127
 - Sesjonsgjenbruk mot provider-CLI-er
 - Function tools og custom tools for M365 Copilot
 - TodoWrite-integrasjon for OpenCode
-- Bildeinput for Codex
+- Bildeinput for alle providers
 - Administrasjon av providers og modeller uten omstart
 - Visning av abonnementskvoter og lokal providerbruk
 - Sesjonshistorikk og logger i minnet
@@ -24,11 +24,11 @@ Prosjektet er bygget med ASP.NET Core og .NET 9. Standardadressen er `http://127
 
 | Provider | Integrasjon | Modelloppdagelse | Bildeinput |
 | --- | --- | --- | --- |
-| Aigravity | `agy` CLI | Dynamisk via `agy models` | Nei |
-| Grok | `grok` CLI | Dynamisk via `grok models` | Nei |
-| Claude | `claude` CLI | Innebygd modelliste | Nei |
+| Aigravity | `agy` CLI | Dynamisk via `agy models` | Ja |
+| Grok | `grok` CLI | Dynamisk via `grok models` | Ja |
+| Claude | `claude` CLI | Innebygd modelliste | Ja |
 | Codex | `codex` CLI | Innebygd modelliste | Ja |
-| M365 | Microsoft 365 Copilot ChatHub | Innebygd modelliste | Nei |
+| M365 | Microsoft 365 Copilot ChatHub og nettleserprofil for vedlegg | Innebygd modelliste | Ja |
 
 AiProxy bruker eksisterende lokal innlogging for de installerte provider-CLI-ene. M365-provideren bruker en lokal MSAL-token-cache eller en kompatibel token-cache fra `m365-copilot-cli`.
 
@@ -180,7 +180,9 @@ Deaktiverte providers og modeller blir ikke brukt. Modellister caches i antall s
 
 ## Bildeinput
 
-Chat Completions og Responses API kan lese multimodale `content`-arrayer med `image_url` eller `input_image`. Bare Codex-provideren annonserer støtte for bilder.
+Chat Completions og Responses API kan lese multimodale `content`-arrayer med `image_url` eller `input_image`. Codex, Claude, Grok, Aigravity og M365 Copilot annonserer støtte for bilder.
+
+Bildet sendes til den valgte provideren. Codex bruker CLI-ens bildeargument og de øvrige coding-agent-CLI-ene mottar et lokalt vedlegg. M365 Copilot bruker nettappens filvelger fra en dedikert AiProxy-nettleserprofil. Åpne `/admin/m365` og velg **Koble til bildeopplasting** første gang. AiProxy viser eller eksporterer aldri cookieverdier fra profilen.
 
 Følgende begrensninger gjelder:
 
@@ -216,6 +218,8 @@ M365-provideren kobler til Microsoft 365 Copilot ChatHub over WebSocket. Følgen
 Interaktiv innlogging kan aktiveres fra `/admin/m365`. Token-cachen lagres som standard under `%LOCALAPPDATA%\AiProxy`.
 
 Hvis en gyldig kompatibel cache finnes under `%USERPROFILE%\.config\opencode-m365\msal-cache.json`, kan denne gjenbrukes.
+
+For bildevedlegg velger du **Koble til bildeopplasting** på `/admin/m365` og fullfører innloggingen i Chromium-vinduet. Den separate profilen lagres under `%LOCALAPPDATA%\AiProxy\m365-browser-profile`; **Fjern bildeprofil** sletter bare denne AiProxy-profilen. En M365-sesjon som først har sendt bilde fortsetter i nettleserprofilen, slik at Copilot beholder vedleggskonteksten.
 
 M365 kan få et avgrenset snapshot av en lokal prosjektmappe. Snapshotet utelater blant annet:
 
