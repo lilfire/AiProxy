@@ -63,7 +63,12 @@ Bygging kopierer automatisk AiProxy-pluginen til OpenCode. Du kan også kjøre s
 .\scripts\Install-OpenCodePlugin.ps1
 ```
 
-Pluginen gir OpenCode dynamisk modelliste og sesjonsgjenbruk mot AiProxy.
+Pluginen gir OpenCode dynamisk modelliste, sesjonsgjenbruk og klientens aktive
+prosjektmappe mot AiProxy. Når OpenCode sender en forespørsel, legger pluginen
+til `X-ShellAi-Workspace`. AiProxy bruker en eksisterende, absolutt mappe fra
+denne headeren som arbeidsmappe for Aigravity, Grok, Claude og Codex, slik at
+CLI-ene arbeider i det aktive prosjektet. Uten en gyldig header brukes
+AiProxys prosjektmappe.
 
 Start tjenesten:
 
@@ -166,6 +171,10 @@ Invoke-RestMethod `
 Hvis ingen sesjonsheader sendes, opprettes en isolert `request-...`-ID. Dersom en provider-sesjon ikke lenger finnes, forsøker AiProxy å opprette en ny sesjon.
 
 Sesjonshistorikken lagres bare i minnet og slettes når AiProxy startes på nytt.
+
+`X-ShellAi-Workspace` er en separat OpenCode-header for klientens aktive
+prosjektmappe. Den brukes bare når verdien er en eksisterende, absolutt mappe;
+ugyldige eller manglende verdier ignoreres.
 
 ## Modellruting
 
@@ -330,7 +339,9 @@ AiProxy.slnx
 - Workspace-skriving er deaktivert som standard.
 - Bilde-URL-er kontrolleres mot private og reserverte adresser for å redusere SSRF-risiko.
 - Logger og sesjonshistorikk kan inneholde prompts og modellsvar, men lagres bare i minnet.
-- Claude startes med `--dangerously-skip-permissions`. Kjør derfor AiProxy med minst mulige lokale rettigheter.
+- Claude startes med `--dangerously-skip-permissions`, og Codex med
+  `--dangerously-bypass-approvals-and-sandbox`. Kjør derfor AiProxy med minst
+  mulige lokale rettigheter, og bruk bare arbeidsmapper du stoler på.
 
 ## Feilsøking
 
