@@ -156,6 +156,7 @@ public sealed class ClaudeProvider : IChatProvider
                 _executableName,
                 arguments,
                 async (line, ct) => { await extractor.ProcessLineAsync(line, ct); },
+                workingDirectory: request.WorkingDirectory,
                 cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException ex) when (!sessionResult.WasCreated && IsSessionMissingError(ex.Message))
@@ -184,6 +185,7 @@ public sealed class ClaudeProvider : IChatProvider
             _executableName,
             arguments,
             async (line, ct) => { await extractor.ProcessLineAsync(line, ct); },
+            workingDirectory: request.WorkingDirectory,
             cancellationToken: cancellationToken);
     }
 

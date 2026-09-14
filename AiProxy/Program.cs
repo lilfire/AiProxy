@@ -26,7 +26,13 @@ builder.Services.AddSingleton<InMemoryLoggerProvider>();
 builder.Logging.Services.AddSingleton<ILoggerProvider>(serviceProvider => serviceProvider.GetRequiredService<InMemoryLoggerProvider>());
 
 builder.Services.AddSingleton<IExecutablePathResolver, ExecutablePathResolver>();
-builder.Services.AddSingleton<ShellCommandRunner>();
+// CLI-er må alltid starte i AiProxys prosjektmappe, ikke i den vilkårlige mappen
+// prosessen ble startet fra (for eksempel en tidligere kundes workspace).
+builder.Services.AddSingleton(sp => new ShellCommandRunner(
+    sp.GetRequiredService<IExecutablePathResolver>(),
+    sp.GetRequiredService<ILogger<ShellCommandRunner>>(),
+    sp.GetRequiredService<IRuntimeSettings>(),
+    builder.Environment.ContentRootPath));
 builder.Services.AddSingleton<ProviderSessionStore>();
 builder.Services.AddSingleton<IProviderUsageStore, ProviderUsageStore>();
 builder.Services.AddSingleton<IUsageUpdateNotifier>(sp => (IUsageUpdateNotifier)sp.GetRequiredService<IProviderUsageStore>());

@@ -81,7 +81,7 @@ public sealed partial class GrokProvider : IChatProvider
 
         try
         {
-            return await _commandRunner.RunCommandAsync("grok", arguments, cancellationToken: cancellationToken);
+            return await _commandRunner.RunCommandAsync("grok", arguments, workingDirectory: request.WorkingDirectory, cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException ex) when (!sessionResult.WasCreated && IsSessionMissingError(ex.Message))
         {
@@ -98,7 +98,7 @@ public sealed partial class GrokProvider : IChatProvider
 
         var arguments = BuildArguments(request, promptFilePath, newSessionId, true);
 
-        return await _commandRunner.RunCommandAsync("grok", arguments, cancellationToken: cancellationToken);
+        return await _commandRunner.RunCommandAsync("grok", arguments, workingDirectory: request.WorkingDirectory, cancellationToken: cancellationToken);
     }
 
     private List<string> BuildArguments(OpenAiChatRequest request, string promptFilePath, string providerSessionId, bool isNewSession)

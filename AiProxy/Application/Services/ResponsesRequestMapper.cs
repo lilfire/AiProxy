@@ -25,6 +25,7 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
             Stream = request.Stream,
             Temperature = request.Temperature,
             MaxTokens = request.MaxTokens,
+            WorkingDirectory = request.WorkingDirectory,
             ToolChoice = request.ToolChoice?.Clone(),
             FunctionTools = request.Tools?
                 .Select(tool => tool.ToCallableTool())

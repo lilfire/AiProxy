@@ -13,15 +13,20 @@ public class ShellCommandRunner
     private readonly IExecutablePathResolver _executablePathResolver;
     private readonly ILogger<ShellCommandRunner> _logger;
     private readonly IRuntimeSettings _settings;
+    private readonly string _defaultWorkingDirectory;
 
     public ShellCommandRunner(
         IExecutablePathResolver executablePathResolver,
         ILogger<ShellCommandRunner> logger,
-        IRuntimeSettings settings)
+        IRuntimeSettings settings,
+        string? defaultWorkingDirectory = null)
     {
         _executablePathResolver = executablePathResolver;
         _logger = logger;
         _settings = settings;
+        _defaultWorkingDirectory = string.IsNullOrWhiteSpace(defaultWorkingDirectory)
+            ? Environment.CurrentDirectory
+            : Path.GetFullPath(defaultWorkingDirectory);
     }
 
     public async Task<string> RunCommandAsync(
@@ -49,7 +54,7 @@ public class ShellCommandRunner
         var argumentList = argumentSegments.ToList();
         var actualWorkingDirectory = ResolveWorkingDirectory(workingDirectory);
 
-        _logger.LogInformation("Kjører kommando {Command} {Arguments}", command, string.Join(" ", argumentList));
+        _logger.LogInformation("Kjører kommando {Command} {Arguments} i {WorkingDirectory}", command, string.Join(" ", argumentList), actualWorkingDirectory);
 
         using var process = StartProcess(executablePath, argumentList, actualWorkingDirectory, stdinInput != null);
         var outputBuilder = new StringBuilder();
@@ -87,7 +92,7 @@ public class ShellCommandRunner
         var argumentList = argumentSegments.ToList();
         var actualWorkingDirectory = ResolveWorkingDirectory(workingDirectory);
 
-        _logger.LogInformation("Strømmer kommando {Command} {Arguments}", command, string.Join(" ", argumentList));
+        _logger.LogInformation("Strømmer kommando {Command} {Arguments} i {WorkingDirectory}", command, string.Join(" ", argumentList), actualWorkingDirectory);
 
         using var process = StartProcess(executablePath, argumentList, actualWorkingDirectory, stdinInput != null);
         var errorBuilder = new StringBuilder();
@@ -145,7 +150,7 @@ public class ShellCommandRunner
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
-        _logger.LogInformation("Leser status fra {Command}", command);
+        _logger.LogInformation("Leser status fra {Command} i {WorkingDirectory}", command, _defaultWorkingDirectory);
         if (!process.Start())
             throw new InvalidOperationException($"Klarte ikke å starte prosess: {command}");
 
@@ -233,10 +238,10 @@ public class ShellCommandRunner
         }
     }
 
-    private static string ResolveWorkingDirectory(string? workingDirectory)
+    private string ResolveWorkingDirectory(string? workingDirectory)
     {
         return string.IsNullOrWhiteSpace(workingDirectory)
-            ? Environment.CurrentDirectory
+            ? _defaultWorkingDirectory
             : workingDirectory;
     }
 

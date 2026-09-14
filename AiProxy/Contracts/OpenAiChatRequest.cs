@@ -26,6 +26,10 @@ public class OpenAiChatRequest
     [JsonPropertyName("tool_choice")]
     public JsonElement? ToolChoice { get; set; }
 
+    /// <summary>Arbeidsmappen OpenCode sendte med denne forespørselen. Sendes aldri i OpenAI-JSON.</summary>
+    [JsonIgnore]
+    public string? WorkingDirectory { get; set; }
+
     /// <summary>Normalized tool declarations used internally by tool-aware providers.</summary>
     [JsonIgnore]
     public List<OpenAiFunctionTool> FunctionTools { get; set; } = new();

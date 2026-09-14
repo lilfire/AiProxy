@@ -17,6 +17,7 @@ public sealed class ChatRequestFactory : IChatRequestFactory
             MaxTokens = request.MaxTokens,
             Tools = request.Tools,
             ToolChoice = request.ToolChoice?.Clone(),
+            WorkingDirectory = request.WorkingDirectory,
             FunctionTools = request.FunctionTools.ToList(),
             PreviousToolCalls = request.PreviousToolCalls.ToList(),
             ToolResults = request.ToolResults.ToList()

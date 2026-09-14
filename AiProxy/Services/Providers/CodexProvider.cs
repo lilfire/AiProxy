@@ -66,7 +66,7 @@ public sealed class CodexProvider : IChatProvider
 
         try
         {
-            return await _commandRunner.RunCommandAsync("codex", arguments, stdinInput: prompt, cancellationToken: cancellationToken);
+            return await _commandRunner.RunCommandAsync("codex", arguments, workingDirectory: request.WorkingDirectory, stdinInput: prompt, cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException ex) when (!sessionResult.WasCreated && (IsSessionMissingError(ex.Message) || IsThreadMissingError(ex.Message)))
         {
@@ -82,12 +82,16 @@ public sealed class CodexProvider : IChatProvider
         var prompt = await File.ReadAllTextAsync(promptFilePath, cancellationToken);
         var arguments = BuildArguments(request, string.Empty, true, imagePaths);
 
-        return await _commandRunner.RunCommandAsync("codex", arguments, stdinInput: prompt, cancellationToken: cancellationToken);
+        return await _commandRunner.RunCommandAsync("codex", arguments, workingDirectory: request.WorkingDirectory, stdinInput: prompt, cancellationToken: cancellationToken);
     }
 
-    private List<string> BuildArguments(OpenAiChatRequest request, string providerSessionId, bool isNewSession, IReadOnlyList<string> imagePaths)
+    internal List<string> BuildArguments(OpenAiChatRequest request, string providerSessionId, bool isNewSession, IReadOnlyList<string> imagePaths)
     {
-        var arguments = new List<string> { "exec" };
+        // OpenCode can ask its selected provider to update global instructions and skills
+        // outside the project. `--add-dir` is not honoured by Codex' non-interactive
+        // filesystem tool on Windows, so use the same unrestricted provider policy
+        // already used for Claude.
+        var arguments = new List<string> { "exec", "--dangerously-bypass-approvals-and-sandbox" };
 
         if (!isNewSession)
         {

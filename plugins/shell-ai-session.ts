@@ -52,7 +52,7 @@ async function fetchModels(baseUrl: string): Promise<OpenAiModelsResponse>
     })
 }
 
-export default (async () =>
+export default (async ({ directory }) =>
 {
     return {
         config: async (cfg: Config): Promise<void> =>
@@ -94,6 +94,7 @@ export default (async () =>
         {
             output.headers = output.headers || {}
             output.headers["X-ShellAi-Session"] = input.sessionID
+            output.headers["X-ShellAi-Workspace"] = directory
         },
     }
 }) satisfies Plugin

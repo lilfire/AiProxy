@@ -26,4 +26,7 @@ public class OpenAiResponsesRequest
     /// <summary>Sendes både som strengen "auto" og som objekt, så den må bindes som rå JSON.</summary>
     [JsonPropertyName("tool_choice")]
     public JsonElement? ToolChoice { get; set; }
+
+    [JsonIgnore]
+    public string? WorkingDirectory { get; set; }
 }

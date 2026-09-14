@@ -1,5 +1,6 @@
 using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
+using AiProxy.Services;
 using FluentValidation;
 
 namespace AiProxy.Routes;
@@ -37,6 +38,7 @@ public static class ChatCompletionsRoute
             if (!validationResult.IsValid)
                 return Results.ValidationProblem(validationResult.ToDictionary());
 
+            request.WorkingDirectory = ClientWorkspaceResolver.Resolve(context.Request);
             var sessionId = sessionIdResolver.ResolveSessionId(context);
             return await chatCompletionService.ExecuteAsync(request, sessionId, cancellationToken);
         })
@@ -56,6 +58,7 @@ public static class ChatCompletionsRoute
             if (!validationResult.IsValid)
                 return Results.ValidationProblem(validationResult.ToDictionary());
 
+            request.WorkingDirectory = ClientWorkspaceResolver.Resolve(context.Request);
             var sessionId = sessionIdResolver.ResolveSessionId(context);
             return await responsesService.ExecuteAsync(request, sessionId, cancellationToken);
         })

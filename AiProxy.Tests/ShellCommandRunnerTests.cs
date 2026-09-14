@@ -54,6 +54,30 @@ public class ShellCommandRunnerTests
         CollectionAssert.Contains(logger.LogLevels, LogLevel.Error);
     }
 
+    [TestMethod]
+    public async Task Run_command_uses_configured_default_working_directory()
+    {
+        var workingDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workingDirectory);
+
+        try
+        {
+            var runner = new ShellCommandRunner(
+                new ExecutablePathResolver(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ShellCommandRunner>.Instance,
+                new TestRuntimeSettings(),
+                workingDirectory);
+
+            var output = await runner.RunCommandAsync(ResolveShell(), BuildPrintWorkingDirectoryArguments());
+
+            Assert.AreEqual(Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar), output.Trim().TrimEnd(Path.DirectorySeparatorChar));
+        }
+        finally
+        {
+            Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
     private string ResolveShell()
     {
         return OperatingSystem.IsWindows() ? "cmd" : "sh";
@@ -81,6 +105,11 @@ public class ShellCommandRunnerTests
             return ["/c", "echo diagnostic 1>&2&exit /b 7"];
 
         return ["-c", "printf 'diagnostic\\n' >&2; exit 7"];
+    }
+
+    private List<string> BuildPrintWorkingDirectoryArguments()
+    {
+        return OperatingSystem.IsWindows() ? ["/c", "cd"] : ["-c", "pwd"];
     }
 
     private ShellCommandRunner CreateRunner(ILogger<ShellCommandRunner>? logger = null)

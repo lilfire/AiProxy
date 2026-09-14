@@ -87,7 +87,7 @@ public sealed class AigravityProvider : IChatProvider
 
         try
         {
-            return await _commandRunner.RunCommandAsync("agy", arguments, cancellationToken: cancellationToken);
+            return await _commandRunner.RunCommandAsync("agy", arguments, workingDirectory: request.WorkingDirectory, cancellationToken: cancellationToken);
         }
         catch (InvalidOperationException ex) when (IsConversationMissingError(ex.Message))
         {
@@ -115,7 +115,7 @@ public sealed class AigravityProvider : IChatProvider
         _sessionStore.Reset(sessionId, Name);
 
         var arguments = BuildArguments(promptFilePath, modelId, string.Empty, includeConversationId: false);
-        return await _commandRunner.RunCommandAsync("agy", arguments, cancellationToken: cancellationToken);
+        return await _commandRunner.RunCommandAsync("agy", arguments, workingDirectory: request.WorkingDirectory, cancellationToken: cancellationToken);
     }
 
     private bool IsConversationMissingError(string message)
