@@ -1,12 +1,14 @@
 using System.Text.RegularExpressions;
 using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
+using AiProxy.Services.Tools;
 
 namespace AiProxy.Services;
 
-public sealed partial class GrokProvider : IChatProvider
+public sealed partial class GrokProvider : IChatProvider, IToolAwareChatProvider
 {
     private readonly int _modelListTimeoutSeconds = 5;
+    private readonly CliClientToolRunner _toolRunner = new(OpenAiConstants.Providers.Grok);
 
     private readonly ILogger<GrokProvider> _logger;
     private readonly ShellCommandRunner _commandRunner;
@@ -72,6 +74,36 @@ public sealed partial class GrokProvider : IChatProvider
         }
     }
 
+    public async Task<OpenAiToolExecutionResult> ExecuteWithToolsAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
+    {
+        // Uten egne verktøy kan CLI-en ikke lese bildefilene @-referansene peker på, så bildeturer
+        // besvares som vanlig tekst.
+        if (request.Messages.Any(message => message.Images.Count > 0))
+            return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
+
+        var basePrompt = ImagePromptBuilder.Build(ClientToolMessageFilter.WithoutToolExchange(request.Messages), []);
+
+        return await _toolRunner.RunAsync(
+            request,
+            basePrompt,
+            (prompt, ct) => RunPromptAsync(request, sessionId, prompt, ct),
+            cancellationToken);
+    }
+
+    private async Task<string> RunPromptAsync(OpenAiChatRequest request, string sessionId, string prompt, CancellationToken cancellationToken)
+    {
+        var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "grok", prompt, cancellationToken);
+
+        try
+        {
+            return await ExecuteWithSessionRecoveryAsync(request, sessionId, promptFilePath, cancellationToken);
+        }
+        finally
+        {
+            _promptFileWriter.TryDelete(promptFilePath);
+        }
+    }
+
     private async Task<string> ExecuteWithSessionRecoveryAsync(OpenAiChatRequest request, string sessionId, string promptFilePath, CancellationToken cancellationToken)
     {
         var sessionResult = _sessionStore.GetOrCreateSessionId(sessionId, Name, () => Guid.NewGuid().ToString());
@@ -101,7 +133,7 @@ public sealed partial class GrokProvider : IChatProvider
         return await _commandRunner.RunCommandAsync("grok", arguments, workingDirectory: request.WorkingDirectory, cancellationToken: cancellationToken);
     }
 
-    private List<string> BuildArguments(OpenAiChatRequest request, string promptFilePath, string providerSessionId, bool isNewSession)
+    internal List<string> BuildArguments(OpenAiChatRequest request, string promptFilePath, string providerSessionId, bool isNewSession)
     {
         var arguments = new List<string>();
 
@@ -124,6 +156,14 @@ public sealed partial class GrokProvider : IChatProvider
         arguments.Add("--no-alt-screen");
         arguments.Add("--output-format");
         arguments.Add("plain");
+
+        // Tom tillatelsesliste fjerner CLI-ens egne verktøy, slik at den må returnere et kall
+        // klienten utfører i stedet for å gjøre jobben selv.
+        if (request.FunctionTools.Count > 0)
+        {
+            arguments.Add("--tools");
+            arguments.Add(string.Empty);
+        }
 
         return arguments;
     }

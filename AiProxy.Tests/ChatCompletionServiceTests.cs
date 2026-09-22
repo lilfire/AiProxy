@@ -93,6 +93,88 @@ public class ChatCompletionServiceTests
         Assert.AreEqual("read_file", provider.LastToolRequest!.FunctionTools.Single().Name);
     }
 
+    [TestMethod]
+    public async Task ExecuteAsync_keeps_only_the_tool_exchange_after_the_last_user_message()
+    {
+        var provider = new FakeToolAwareChatProvider(["model-1"], new OpenAiToolExecutionResult("ferdig", null));
+        var service = CreateToolService(provider);
+        var request = new OpenAiChatRequest
+        {
+            Model = "model-1",
+            Stream = false,
+            Messages =
+            [
+                new OpenAiMessage("user", "Les a.txt"),
+                AssistantCall("call_a", "read_file"),
+                ToolResult("call_a", "innhold a"),
+                new OpenAiMessage("user", "Les b.txt"),
+                AssistantCall("call_b", "read_file"),
+                ToolResult("call_b", "innhold b")
+            ],
+            Tools = [ReadFileTool()]
+        };
+
+        await service.ExecuteAsync(request, "session-1");
+
+        var toolRequest = provider.LastToolRequest!;
+        Assert.AreEqual("call_b", toolRequest.PreviousToolCalls.Single().Id);
+        Assert.AreEqual("innhold b", toolRequest.ToolResults.Single().Output);
+        Assert.IsTrue(toolRequest.HasToolResultsSinceLastUserMessage);
+    }
+
+    [TestMethod]
+    public async Task ExecuteAsync_forwards_a_custom_tool_declaration_to_a_tool_aware_provider()
+    {
+        var provider = new FakeToolAwareChatProvider(["model-1"], new OpenAiToolExecutionResult("ferdig", null));
+        var service = CreateToolService(provider);
+        var request = new OpenAiChatRequest
+        {
+            Model = "model-1",
+            Stream = false,
+            Messages = [new OpenAiMessage("user", "Kjør den")],
+            Tools = [new OpenAiChatTool
+            {
+                Type = "custom",
+                Custom = new OpenAiChatFunction { Name = "shell", Description = "Kjører en kommando" }
+            }]
+        };
+
+        await service.ExecuteAsync(request, "session-1");
+
+        var declared = provider.LastToolRequest!.FunctionTools.Single();
+        Assert.AreEqual("shell", declared.Name);
+        Assert.AreEqual("custom", declared.Type);
+    }
+
+    private ChatCompletionService CreateToolService(IChatProvider provider) =>
+        new(
+            CreateRegistry(provider),
+            new ChatRequestFactory(),
+            new OpenAiStreamFormatter(),
+            new ProviderUsageStore(),
+            new InMemorySessionHistoryStore(),
+            NullLogger<ChatCompletionService>.Instance);
+
+    private OpenAiChatTool ReadFileTool() =>
+        new()
+        {
+            Type = "function",
+            Function = new OpenAiChatFunction { Name = "read_file", Description = "Leser en fil" }
+        };
+
+    private OpenAiMessage AssistantCall(string callId, string name) =>
+        new("assistant", null)
+        {
+            ToolCalls = [new OpenAiChatToolCall
+            {
+                Id = callId,
+                Function = new OpenAiChatToolFunction { Name = name, Arguments = "{}" }
+            }]
+        };
+
+    private OpenAiMessage ToolResult(string callId, string output) =>
+        new("tool", output) { ToolCallId = callId };
+
     private IChatProviderRegistry CreateRegistry(IChatProvider provider)
     {
         var aigravityProvider = new FakeChatProvider("Aigravity", new[] { "agy-model" }, "ok");

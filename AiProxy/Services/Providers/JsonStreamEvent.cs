@@ -11,6 +11,10 @@ internal sealed class JsonStreamEvent
     [JsonPropertyName("result")]
     public string Result { get; set; } = string.Empty;
 
+    /// <summary>Claude CLI rapporterer API-feil her, ikke på stderr.</summary>
+    [JsonPropertyName("is_error")]
+    public bool IsError { get; set; }
+
     [JsonPropertyName("message")]
     public JsonElement Message { get; set; }
 

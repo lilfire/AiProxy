@@ -1,12 +1,15 @@
 using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
+using AiProxy.Services.Tools;
 
 namespace AiProxy.Services.Providers;
 
-public sealed class AigravityProvider : IChatProvider
+public sealed class AigravityProvider : IChatProvider, IToolAwareChatProvider
 {
     private readonly int _modelListTimeoutSeconds = 5;
     private readonly char _modelLabelSeparator = '\t';
+
+    private readonly CliClientToolRunner _toolRunner = new(OpenAiConstants.Providers.Aigravity);
 
     private readonly ILogger<AigravityProvider> _logger;
     private readonly ShellCommandRunner _commandRunner;
@@ -64,6 +67,41 @@ public sealed class AigravityProvider : IChatProvider
         var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "agy", prompt, cancellationToken);
 
         _logger.LogInformation("Kjører {ProviderName} for modell {Model} i sesjon {Session}", Name, modelId, sessionId);
+
+        try
+        {
+            return await ExecuteWithRetryAsync(request, sessionId, promptFilePath, modelId, cancellationToken);
+        }
+        finally
+        {
+            _promptFileWriter.TryDelete(promptFilePath);
+        }
+    }
+
+    /// <summary>
+    /// agy har ingen bryter for å fjerne sine egne verktøy, så her styrer bare protokollteksten.
+    /// CLI-en kan derfor velge å gjøre jobben selv i stedet for å returnere et klientkall.
+    /// </summary>
+    public async Task<OpenAiToolExecutionResult> ExecuteWithToolsAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
+    {
+        if (request.Messages.Any(message => message.Images.Count > 0))
+            return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
+
+        var basePrompt = ImagePromptBuilder.Build(ClientToolMessageFilter.WithoutToolExchange(request.Messages), []);
+
+        return await _toolRunner.RunAsync(
+            request,
+            basePrompt,
+            (prompt, ct) => RunPromptAsync(request, sessionId, prompt, ct),
+            cancellationToken);
+    }
+
+    private async Task<string> RunPromptAsync(OpenAiChatRequest request, string sessionId, string prompt, CancellationToken cancellationToken)
+    {
+        var modelId = NormalizeModelId(request.Model);
+        var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "agy", prompt, cancellationToken);
+
+        _logger.LogInformation("Kjører {ProviderName} med klientverktøy for modell {Model} i sesjon {Session}", Name, modelId, sessionId);
 
         try
         {

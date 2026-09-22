@@ -20,7 +20,8 @@ public sealed class ChatRequestFactory : IChatRequestFactory
             WorkingDirectory = request.WorkingDirectory,
             FunctionTools = request.FunctionTools.ToList(),
             PreviousToolCalls = request.PreviousToolCalls.ToList(),
-            ToolResults = request.ToolResults.ToList()
+            ToolResults = request.ToolResults.ToList(),
+            HasToolResultsSinceLastUserMessage = request.HasToolResultsSinceLastUserMessage
         };
     }
 }

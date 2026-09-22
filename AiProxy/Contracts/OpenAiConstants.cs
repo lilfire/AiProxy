@@ -41,6 +41,7 @@ public static class OpenAiConstants
     public static class FinishReasons
     {
         public const string Stop = "stop";
+        public const string ToolCalls = "tool_calls";
         public const string Empty = "";
     }
 
@@ -48,6 +49,7 @@ public static class OpenAiConstants
     {
         public const string User = "user";
         public const string Assistant = "assistant";
+        public const string Tool = "tool";
     }
 
     public static class ResponseEventTypes

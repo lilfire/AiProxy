@@ -61,6 +61,50 @@ public sealed class M365CopilotResponseTests
     }
 
     [TestMethod]
+    public async Task Separate_status_and_tool_call_messages_are_joined_from_the_final_item_without_losing_the_fence()
+    {
+        const string toolCall = "```tool_call\n{\"call_id\":\"call_inspect\",\"name\":\"bash\",\"arguments\":{\"command\":\"dir\"}}\n```";
+        using var socket = new FrameSocket(
+            """{"type":1,"target":"update","arguments":[{"messages":[{"author":"bot","text":"Jeg undersøker først lysbildene."}]}]}""",
+            """{"type":1,"target":"update","arguments":[{"messages":[{"author":"bot","messageType":"Progress","text":"Coding and executing"}]}]}""",
+            """{"type":1,"target":"update","arguments":[{"messages":[{"author":"bot","text":"```"}]}]}""",
+            """{"type":1,"target":"update","arguments":[{"writeAtCursor":"tool_call\n{\"call_id\":\"call_inspect\",\"name\":\"bash\",\"arguments\":{\"command\":\"dir\"}}\n```"}]}""",
+            "{\"type\":2,\"item\":{\"result\":{\"value\":\"Success\"},\"messages\":[" +
+                "{\"author\":\"user\",\"text\":\"prompt\"}," +
+                "{\"author\":\"bot\",\"text\":\"Jeg undersøker først lysbildene.\"}," +
+                "{\"author\":\"bot\",\"messageType\":\"Progress\",\"text\":\"**Considering tool options**\"}," +
+                "{\"author\":\"bot\",\"text\":" + System.Text.Json.JsonSerializer.Serialize(toolCall) + "}]}}");
+
+        Assert.AreEqual("Jeg undersøker først lysbildene.\n\n" + toolCall, await ReadAsync(socket));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task Copilot_container_invocations_are_reported_separately_from_the_answer(bool invocationIsSerializedString)
+    {
+        // The hub sends invocation as a JSON string containing the array; accept a bare array too.
+        var invocation = System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            """{"function":{"arguments":"{\"cmd\":[\"bash\",\"-lc\",\"ls -la /mnt/data\"]}","name":"container.exec"},"id":"call_native","type":"function"}"""
+        });
+        if (invocationIsSerializedString)
+            invocation = System.Text.Json.JsonSerializer.Serialize(invocation);
+        using var socket = new FrameSocket(
+            "{\"type\":2,\"item\":{\"result\":{\"value\":\"Success\"},\"messages\":[" +
+                "{\"author\":\"bot\",\"text\":\"Jeg undersøker presentasjonen.\",\"invocation\":" + invocation + "}," +
+                "{\"author\":\"bot\",\"text\":\"Last opp PowerPoint-filen.\"}]}}");
+        var invocations = new List<string>();
+
+        var answer = await M365CopilotProvider.ReadResponseAsync(socket, null, CancellationToken.None, "request-test", nativeInvocations: invocations);
+
+        Assert.AreEqual("Jeg undersøker presentasjonen.\n\nLast opp PowerPoint-filen.", answer);
+        CollectionAssert.AreEqual(new[] { "container.exec" }, invocations);
+        Assert.IsTrue(M365ToolProtocol.IsSandboxInvocation(invocations[0]));
+        StringAssert.Contains(M365ToolProtocol.BuildSandboxCorrection(@"C:\Git\hackathon"), @"C:\Git\hackathon");
+    }
+
+    [TestMethod]
     public async Task Final_failure_overrides_partial_output()
     {
         using var socket = new FrameSocket(

@@ -103,15 +103,20 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
 
         // Tool mode is intentionally buffered: neither a fence nor a malformed call can leak to
-        // the client as assistant text. A read-only workspace snapshot gives the model the
-        // project context it needs while declared client tools remain the only write path.
-        // Model-authored file blocks are never applied in this mode.
+        // the client as assistant text. As with m365-copilot-cli `ask --dir --write`, the model
+        // may change a snapshot text file by returning a complete ===FILE block, which is
+        // written back locally; declared client tools cover every other action.
         var workspace = await _workspaceBridge.BuildPromptAsync(
-            BuildPrompt(request.Messages), _settings.Current.M365Copilot, cancellationToken);
+            BuildPrompt(request.Messages), _settings.Current.M365Copilot, cancellationToken, request.WorkingDirectory,
+            clientToolsDeclared: true);
         var prompt = M365ToolProtocol.AppendInstruction(
             workspace.Prompt, request.FunctionTools, request.ToolChoice,
             request.PreviousToolCalls, request.ToolResults);
-        var requiresWriteCall = M365ToolProtocol.RequiresDeclaredWriteCall(request.Messages, request.FunctionTools);
+        // The write requirement only governs the first answer to a user request. Once the client
+        // has executed a tool, a text answer is the model's conclusion; forcing another call
+        // repeats a successful patch or fails a request that only needed to read.
+        var requiresWriteCall = !request.HasToolResultsSinceLastUserMessage &&
+            M365ToolProtocol.RequiresDeclaredWriteCall(request.Messages, request.FunctionTools);
         if (requiresWriteCall)
         {
             var lastUserMsgs = request.Messages
@@ -127,10 +132,11 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         }
         if (requiresWriteCall)
             prompt += "\n\n<required-local-write>" +
-                "The user explicitly requested a local file change. Invoke the declared client write tool now. " +
+                "The user explicitly requested a local file change. Make it now: a ===FILE block for a snapshot text file, otherwise the declared client write tool. " +
                 "Do not create a cloud document, return a link, or describe a completed change as text." +
                 "</required-local-write>";
-        var answer = await ExecuteRawAsync(request, sessionId, prompt, cancellationToken);
+        var nativeInvocations = new List<string>();
+        var answer = await ExecuteRawAsync(request, sessionId, prompt, cancellationToken, nativeInvocations);
 
         if (M365ToolProtocol.TryParse(answer, request.FunctionTools, out var call))
         {
@@ -138,6 +144,26 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
                 throw new InvalidOperationException("M365 Copilot forsøkte et verktøykall som tool_choice ikke tillater.");
 
             return new OpenAiToolExecutionResult(string.Empty, call);
+        }
+
+        var fileBlocks = await _workspaceBridge.ApplyWritesAsync(answer, workspace, createBackups: false, cancellationToken);
+        if (fileBlocks.WrittenFiles.Count > 0)
+            return new OpenAiToolExecutionResult(fileBlocks.Answer, null);
+
+        // GPT-5 reasoning turns sometimes run Copilot's own code container (container.exec on
+        // /mnt/data) instead of a client tool, find nothing, and ask the user to upload a local
+        // file. Given that correction, the model issues the client call instead.
+        if (nativeInvocations.Any(M365ToolProtocol.IsSandboxInvocation))
+        {
+            _logger.LogWarning("M365 Copilot brukte sin egen sandkasse ({Invocations}) i stedet for et klientverktøy. Svaret: {Answer}",
+                string.Join(", ", nativeInvocations), Truncate(answer, 500));
+            answer = await ExecuteRawAsync(request, sessionId, prompt + M365ToolProtocol.BuildSandboxCorrection(request.WorkingDirectory), cancellationToken);
+            if (TryParseToolCall(answer, request, out call))
+                return new OpenAiToolExecutionResult(string.Empty, call);
+
+            fileBlocks = await _workspaceBridge.ApplyWritesAsync(answer, workspace, createBackups: false, cancellationToken);
+            if (fileBlocks.WrittenFiles.Count > 0)
+                return new OpenAiToolExecutionResult(fileBlocks.Answer, null);
         }
 
         if (requiresWriteCall)
@@ -150,7 +176,10 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         }
 
         if (M365ToolProtocol.IsToolFence(answer))
+        {
+            _logger.LogWarning("M365 Copilot returnerte et verktøykall som ikke kunne tolkes. Svaret: {Answer}", Truncate(answer, 20_000));
             throw new InvalidOperationException("M365 Copilot returnerte et ugyldig eller ikke-deklarert verktøykall.");
+        }
 
         return new OpenAiToolExecutionResult(answer, null);
     }
@@ -251,7 +280,8 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             throw new InvalidOperationException("M365 Copilot-provideren er deaktivert i konfigurasjonen.");
 
         var prompt = BuildPrompt(request.Messages);
-        var workspace = await _workspaceBridge.BuildPromptAsync(prompt, _settings.Current.M365Copilot, cancellationToken);
+        var workspace = await _workspaceBridge.BuildPromptAsync(
+            prompt, _settings.Current.M365Copilot, cancellationToken, request.WorkingDirectory);
         var answer = await ExecuteRawAsync(request, clientSessionId, workspace.Prompt, cancellationToken);
 
         if (!workspace.WritesEnabled)
@@ -267,7 +297,9 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         return writeResult.Answer;
     }
 
-    private async Task<string> ExecuteRawAsync(OpenAiChatRequest request, string clientSessionId, string prompt, CancellationToken cancellationToken)
+    private async Task<string> ExecuteRawAsync(
+        OpenAiChatRequest request, string clientSessionId, string prompt, CancellationToken cancellationToken,
+        ICollection<string>? nativeInvocations = null)
     {
         if (!_settings.Current.M365Copilot.Enabled)
             throw new InvalidOperationException("M365 Copilot-provideren er deaktivert i konfigurasjonen.");
@@ -298,7 +330,7 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             await ReceiveHandshakeAsync(socket, cancellationToken);
 
             await SendChatAsync(socket, request, prompt, requestId, clientSessionId, turn.IsFirstTurn, cancellationToken);
-            return await ReadResponseAsync(socket, onChunk: null, cancellationToken, requestId);
+            return await ReadResponseAsync(socket, onChunk: null, cancellationToken, requestId, _logger, nativeInvocations);
         }
         catch (OperationCanceledException)
         {
@@ -352,7 +384,10 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
             source = "officeweb",
             clientCorrelationId = requestId,
             sessionId,
-            optionsSets = CodeInterpreterOptionSets,
+            // With client tools the local workspace is reachable only through those tools. The
+            // Copilot code interpreter would instead search its own /mnt/data sandbox and report
+            // local files as missing.
+            optionsSets = request.FunctionTools.Count > 0 ? Array.Empty<string>() : CodeInterpreterOptionSets,
             streamingMode = "ConciseWithPadding",
             spokenTextMode = "None",
             options = new { },
@@ -410,7 +445,9 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
         }
     }
 
-    internal static async Task<string> ReadResponseAsync(WebSocket socket, Func<string, CancellationToken, Task>? onChunk, CancellationToken cancellationToken, string requestId)
+    internal static async Task<string> ReadResponseAsync(
+        WebSocket socket, Func<string, CancellationToken, Task>? onChunk, CancellationToken cancellationToken, string requestId,
+        ILogger? logger = null, ICollection<string>? nativeInvocations = null)
     {
         var answer = string.Empty;
 
@@ -439,10 +476,18 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
                     return RequireAnswer(answer, requestId);
                 }
 
+                if (type == 1 && logger?.IsEnabled(LogLevel.Debug) == true &&
+                    root.TryGetProperty("target", out var otherTarget) && otherTarget.GetString() != "update")
+                    logger.LogDebug("M365-ramme {Target} for request {RequestId}: {Frame}", otherTarget.GetString(), requestId, Truncate(frame, 1000));
+
                 if (type == 2)
                 {
                     if (root.TryGetProperty("item", out var item))
                     {
+                        if (logger?.IsEnabled(LogLevel.Debug) == true)
+                            logger.LogDebug("M365-meldinger i request {RequestId}: {Messages}", requestId, DescribeMessages(item));
+                        if (nativeInvocations != null)
+                            CollectNativeInvocations(item, nativeInvocations);
                         // The final item can contain an apology authored by BotConnection
                         // together with result.value=InternalError. It is not model output.
                         if (item.TryGetProperty("result", out var result) &&
@@ -454,7 +499,19 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
                                 ? message.GetString() : null;
                             throw new M365CopilotUpstreamException(value.GetString()!, requestId, detail);
                         }
-                        await AppendMessagesAsync(item, onChunk, cancellationToken, value => answer = Fold(answer, value).Answer, () => answer);
+
+                        // A reasoning turn publishes several bot messages (a status sentence, then
+                        // e.g. a tool_call fence). Streamed text cannot be folded back into those
+                        // messages reliably: a new message's first snapshot is shorter than the text
+                        // gathered so far and is dropped, losing "```" or a leading word. The final
+                        // item holds every message intact and is therefore authoritative.
+                        var finalAnswer = JoinBotChatMessages(item);
+                        if (finalAnswer.Length > 0)
+                        {
+                            if (onChunk != null && finalAnswer.Length > answer.Length && finalAnswer.StartsWith(answer, StringComparison.Ordinal))
+                                await onChunk(finalAnswer[answer.Length..], cancellationToken);
+                            answer = finalAnswer;
+                        }
                     }
                     return RequireAnswer(answer, requestId);
                 }
@@ -478,6 +535,96 @@ public sealed class M365CopilotProvider : IChatProvider, IToolAwareChatProvider
 
         throw new M365CopilotUpstreamException("ConnectionClosed", requestId, "The connection closed before the turn completed.");
     }
+
+    /// <summary>
+    /// Diagnostic outline of every message in a completed turn, including internal tool and
+    /// progress messages that never become answer text. The user's echoed prompt is shortened.
+    /// </summary>
+    private static string DescribeMessages(JsonElement item)
+    {
+        if (!item.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
+            return "(ingen)";
+
+        static string Property(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+
+        return string.Join(" || ", messages.EnumerateArray().Select(message =>
+        {
+            var author = Property(message, "author");
+            var text = Property(message, "text");
+            var extraKeys = string.Join(",", message.EnumerateObject()
+                .Select(property => property.Name)
+                .Where(name => name is not ("author" or "text" or "messageType" or "contentOrigin" or "createdAt" or "timestamp" or "messageId" or "requestId" or "offense" or "adaptiveCards" or "sourceAttributions" or "feedback" or "privacy")));
+            var invocation = message.TryGetProperty("invocation", out var invocationValue)
+                ? " invocation=" + Truncate(invocationValue.ValueKind == JsonValueKind.String ? invocationValue.GetString() ?? "" : invocationValue.GetRawText(), 600)
+                : string.Empty;
+            return $"author={author} messageType={Property(message, "messageType")} contentOrigin={Property(message, "contentOrigin")} " +
+                $"keys=[{extraKeys}]{invocation} text={Truncate(text, author == "user" ? 80 : 600)}";
+        }));
+    }
+
+    /// <summary>Names of Copilot's own tool calls, e.g. container.exec, recorded on bot messages.</summary>
+    private static void CollectNativeInvocations(JsonElement item, ICollection<string> names)
+    {
+        if (!item.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var message in messages.EnumerateArray())
+        {
+            if (message.TryGetProperty("invocation", out var invocation))
+                CollectInvocationNames(invocation, names, depth: 0);
+        }
+    }
+
+    /// <summary>
+    /// The hub serializes invocations as a JSON string holding an array of JSON-string calls, so
+    /// each level may be a string, an array, or the call object itself.
+    /// </summary>
+    private static void CollectInvocationNames(JsonElement element, ICollection<string> names, int depth)
+    {
+        if (depth > 4)
+            return;
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                try
+                {
+                    using (var document = JsonDocument.Parse(element.GetString() ?? string.Empty))
+                        CollectInvocationNames(document.RootElement, names, depth + 1);
+                }
+                catch (JsonException)
+                {
+                    // A plain-text invocation carries no function name.
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var call in element.EnumerateArray())
+                    CollectInvocationNames(call, names, depth + 1);
+                break;
+            case JsonValueKind.Object when element.TryGetProperty("function", out var function) &&
+                function.ValueKind == JsonValueKind.Object &&
+                function.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String:
+                names.Add(name.GetString()!);
+                break;
+        }
+    }
+
+    private static string JoinBotChatMessages(JsonElement item)
+    {
+        if (!item.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
+            return string.Empty;
+
+        return string.Join("\n\n", messages.EnumerateArray()
+            .Where(IsBotChatMessage)
+            .Select(message => message.GetProperty("text").GetString()!.Trim())
+            .Where(text => text.Length > 0));
+    }
+
+    private static bool IsBotChatMessage(JsonElement message) =>
+        message.TryGetProperty("author", out var author) && author.GetString() == "bot" &&
+        message.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String &&
+        !(message.TryGetProperty("messageType", out var messageType) && messageType.ValueKind == JsonValueKind.String);
 
     private static string RequireAnswer(string answer, string requestId) =>
         !string.IsNullOrWhiteSpace(answer)

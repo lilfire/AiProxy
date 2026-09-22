@@ -116,9 +116,7 @@ public sealed class AdminService : IAdminService
             CacheDirectory = settings.M365Copilot.CacheDirectory,
             Locale = settings.M365Copilot.Locale,
             TimeZone = settings.M365Copilot.TimeZone,
-            WorkspaceDirectory = settings.M365Copilot.WorkspaceDirectory,
-            IncludeWorkspaceFiles = settings.M365Copilot.IncludeWorkspaceFiles,
-            EnableWorkspaceWrites = settings.M365Copilot.EnableWorkspaceWrites
+            WorkspaceDirectory = settings.M365Copilot.WorkspaceDirectory
         }
     };
 }

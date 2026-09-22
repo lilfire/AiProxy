@@ -285,6 +285,46 @@ public class ResponsesRequestMapperTests
     }
 
     [TestMethod]
+    public void MapToChatRequest_marks_a_tool_result_after_the_latest_user_message_as_a_tool_loop()
+    {
+        var request = new OpenAiResponsesRequest
+        {
+            Model = "test-model",
+            Input = JsonSerializer.SerializeToElement(new object[]
+            {
+                new { role = "user", content = "Oppdater README.md" },
+                new { type = "function_call", call_id = "call_client_1", name = "apply_patch", arguments = "{}" },
+                new { type = "function_call_output", call_id = "call_client_1", output = "Success" }
+            })
+        };
+
+        var result = CreateMapper().MapToChatRequest(request);
+
+        Assert.IsTrue(result.HasToolResultsSinceLastUserMessage);
+    }
+
+    [TestMethod]
+    public void MapToChatRequest_does_not_mark_a_new_user_message_after_earlier_tool_results_as_a_tool_loop()
+    {
+        var request = new OpenAiResponsesRequest
+        {
+            Model = "test-model",
+            Input = JsonSerializer.SerializeToElement(new object[]
+            {
+                new { role = "user", content = "Les README.md" },
+                new { type = "function_call", call_id = "call_client_1", name = "read", arguments = "{}" },
+                new { type = "function_call_output", call_id = "call_client_1", output = "contents" },
+                new { role = "assistant", content = "Ferdig." },
+                new { role = "user", content = "Oppdater README.md" }
+            })
+        };
+
+        var result = CreateMapper().MapToChatRequest(request);
+
+        Assert.IsFalse(result.HasToolResultsSinceLastUserMessage);
+    }
+
+    [TestMethod]
     public void MapToChatRequest_preserves_custom_tools_for_tool_provider()
     {
         var request = new OpenAiResponsesRequest

@@ -32,8 +32,32 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
                 .OfType<OpenAiFunctionTool>()
                 .ToList() ?? [],
             PreviousToolCalls = ExtractToolCalls(request.Input),
-            ToolResults = ExtractToolResults(request.Input)
+            ToolResults = ExtractToolResults(request.Input),
+            HasToolResultsSinceLastUserMessage = HasToolResultsSinceLastUserMessage(request.Input)
         };
+    }
+
+    private static bool HasToolResultsSinceLastUserMessage(object? input)
+    {
+        if (input is not JsonElement { ValueKind: JsonValueKind.Array } items)
+            return false;
+
+        var hasToolResult = false;
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var type = GetStringProperty(item, "type");
+            if (type is OpenAiConstants.ResponseInputTypes.FunctionCallOutput or OpenAiConstants.ResponseInputTypes.CustomToolCallOutput)
+                hasToolResult = true;
+            else if (type == OpenAiConstants.ResponseInputTypes.InputText ||
+                     item.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String &&
+                     role.GetString() == OpenAiConstants.Roles.User)
+                hasToolResult = false;
+        }
+
+        return hasToolResult;
     }
 
     private List<OpenAiMessage> ExtractMessages(object? input)

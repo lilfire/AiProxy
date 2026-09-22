@@ -9,6 +9,11 @@ internal class FakeStreamingShellRunner : ShellCommandRunner
 {
     private readonly Queue<string> _outputLines = new();
 
+    public List<string> LastArguments { get; private set; } = new();
+
+    /// <summary>Simulerer at CLI-en avslutter med feilkode etter at linjene er skrevet.</summary>
+    public Exception? ThrowAfterOutput { get; set; }
+
     public FakeStreamingShellRunner()
         : base(new ExecutablePathResolver(), NullLogger<ShellCommandRunner>.Instance, new TestRuntimeSettings())
     {
@@ -29,9 +34,14 @@ internal class FakeStreamingShellRunner : ShellCommandRunner
         int? timeoutSeconds = null,
         CancellationToken cancellationToken = default)
     {
+        LastArguments = argumentSegments.ToList();
+
         while (_outputLines.Count > 0)
         {
             await onOutputLine(_outputLines.Dequeue(), cancellationToken);
         }
+
+        if (ThrowAfterOutput != null)
+            throw ThrowAfterOutput;
     }
 }

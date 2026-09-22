@@ -12,7 +12,7 @@ Prosjektet er bygget med ASP.NET Core og .NET 9. Standardadressen er `http://127
 - Automatisk modelloppdagelse og provider-ruting
 - Konfigurerbare modellalias
 - Sesjonsgjenbruk mot provider-CLI-er
-- Function tools og custom tools for M365 Copilot
+- Function tools og custom tools for alle providere
 - TodoWrite-integrasjon for OpenCode
 - Bildeinput for alle providers
 - Administrasjon av providers og modeller uten omstart
@@ -210,7 +210,19 @@ Når en Responses-klient deklarerer `todowrite` eller `todo_write`, kan AiProxy 
 
 Claude sine TodoWrite-kall leses direkte fra `stream-json`. Providere uten et eget TodoWrite-verktøy kan bruke en intern kontrollprotokoll. Kontrollinnholdet fjernes fra teksten som klienten mottar.
 
-M365-provideren kan oversette klientdeklarerte function tools og custom tools til standard OpenAI-responser. Klienten, ikke AiProxy, utfører det returnerte verktøykallet.
+Alle providere kan oversette klientdeklarerte function tools og custom tools til standard OpenAI-responser. Klienten, ikke AiProxy, utfører det returnerte verktøykallet. Det er slik MCP-serverne som er tilkoblet i OpenCode blir tilgjengelige uansett hvilken provider som er valgt.
+
+Den delte oversettelsen ligger i `ClientToolProtocol`: verktøydeklarasjonene legges inn i prompten, og modellen svarer med ett `tool_call`-gjerde som blir et OpenAI `tool_calls`-svar med `finish_reason: tool_calls`. CLI-providerne kjører med sine egne verktøy avskrudd så langt CLI-en tillater det, slik at arbeidet går gjennom klientens verktøy og dens tillatelsesmodell:
+
+| Provider | Når klienten har deklarert verktøy |
+| --- | --- |
+| Claude | `--tools ""` fjerner innebygde verktøy, `--strict-mcp-config` utelater brukerens egne MCP-servere, og `--permission-prompts none` hindrer at en tur blokkerer på et tillatelsesspørsmål. `--dangerously-skip-permissions` utelates |
+| Grok | `--tools ""` fjerner alle innebygde verktøy |
+| Codex | `--sandbox read-only` i stedet for `--dangerously-bypass-approvals-and-sandbox`; CLI-en kan fortsatt lese selv |
+| Aigravity | agy har ingen bryter for dette, så bare protokollteksten styrer |
+| M365 | Ingen egen transport for funksjonskall; protokollen er eneste vei |
+
+Bildeturer går utenom verktøymodus, siden en CLI uten leseverktøy ikke kan åpne de vedlagte filene.
 
 TodoWrite-broen kan deaktiveres med `TodoBridgeEnabled`.
 
@@ -230,7 +242,9 @@ Hvis en gyldig kompatibel cache finnes under `%USERPROFILE%\.config\opencode-m36
 
 For bildevedlegg velger du **Koble til bildeopplasting** på `/admin/m365` og fullfører innloggingen i Chromium-vinduet. Den separate profilen lagres under `%LOCALAPPDATA%\AiProxy\m365-browser-profile`; **Fjern bildeprofil** sletter bare denne AiProxy-profilen. En M365-sesjon som først har sendt bilde fortsetter i nettleserprofilen, slik at Copilot beholder vedleggskonteksten.
 
-M365 kan få et avgrenset snapshot av en lokal prosjektmappe. Snapshotet utelater blant annet:
+M365 får alltid et avgrenset snapshot av OpenCode sin aktive prosjektmappe. Hvis
+klienten ikke sender en aktiv mappe, brukes prosjektmappen konfigurert under
+`/admin/m365` (eller AiProxy-mappen som siste reserve). Snapshotet utelater blant annet:
 
 - Hemmelige filer som `.env`, nøkler og sertifikater
 - Build-mapper som `bin`, `obj`, `dist` og `node_modules`
@@ -238,7 +252,15 @@ M365 kan få et avgrenset snapshot av en lokal prosjektmappe. Snapshotet utelate
 - Filer større enn 300 KB
 - Innhold utover en samlet grense på 1,5 MB
 
-Direkte skriving fra modelltekst er deaktivert som standard. Når klientverktøy er deklarert, behandles workspace-snapshotet som skrivebeskyttet og filendringer skal utføres gjennom klientens skriveverktøy.
+For tekstfiler i snapshotet brukes samme automatiske arbeidsflyt som
+`m365-copilot ask --dir --write`: modellen får filinnholdet og komplette
+`===FILE===`-blokker skrives tilbake kun til de viste lokale filene. Det kreves
+ingen klient- eller proxy-flagg. Når OpenCode har deklarert et eget skriveverktøy,
+brukes det verktøyet først.
+
+PowerPoint- og andre Office-filer er binære og blir bevisst ikke sendt i
+snapshotet. De kan derfor ikke redigeres direkte av denne tekstbaserte
+arbeidsflyten; en SharePoint-/Teams-lenke er heller ikke en lokal filendring.
 
 ## Konfigurasjon
 
@@ -255,9 +277,7 @@ Standardinnstillingene ligger under `AiProxy` i `AiProxy/appsettings.json`:
       "Enabled": true,
       "EnableInteractiveLogin": false,
       "Locale": "en-GB",
-      "TimeZone": "Europe/Oslo",
-      "IncludeWorkspaceFiles": true,
-      "EnableWorkspaceWrites": false
+      "TimeZone": "Europe/Oslo"
     }
   }
 }
@@ -306,7 +326,7 @@ Testene dekker blant annet:
 - SSE-streaming
 - Bildevalidering og opprydding
 - TodoWrite-broen
-- M365-verktøyprotokollen
+- Den delte klientverktøyprotokollen og CLI-koblingen
 - Workspace-filtrering og skriving
 - Providerkvoter
 - Feilhåndtering
@@ -335,13 +355,15 @@ AiProxy.slnx
 - Tjenesten binder som standard bare til `127.0.0.1`.
 - Administrasjonsgrensesnittet avviser ikke-lokale klienter.
 - API-et har ingen egen autentisering. Ikke eksponer tjenesten offentlig uten et autentiserende reverse proxy-lag.
-- M365-workspace kan sende innholdet i inkluderte tekstfiler til Microsoft 365 Copilot.
-- Workspace-skriving er deaktivert som standard.
+- M365-workspace sender et filtrert snapshot av inkluderte tekstfiler til Microsoft 365 Copilot og kan bare skrive tilbake til de samme filene.
 - Bilde-URL-er kontrolleres mot private og reserverte adresser for å redusere SSRF-risiko.
 - Logger og sesjonshistorikk kan inneholde prompts og modellsvar, men lagres bare i minnet.
-- Claude startes med `--dangerously-skip-permissions`, og Codex med
-  `--dangerously-bypass-approvals-and-sandbox`. Kjør derfor AiProxy med minst
-  mulige lokale rettigheter, og bruk bare arbeidsmapper du stoler på.
+- Uten klientdeklarerte verktøy startes Claude med `--dangerously-skip-permissions`
+  og Codex med `--dangerously-bypass-approvals-and-sandbox`. Kjør derfor AiProxy med
+  minst mulige lokale rettigheter, og bruk bare arbeidsmapper du stoler på.
+- Når klienten har deklarert verktøy, kjører Claude og Grok uten egne verktøy og Codex
+  i en read-only-sandkasse. Da er det klienten som utfører handlingene, og dens egen
+  tillatelsesmodell gjelder.
 
 ## Feilsøking
 

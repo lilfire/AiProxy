@@ -74,9 +74,7 @@ public sealed class RuntimeSettings : IRuntimeSettings
             CacheDirectory = options.M365Copilot.CacheDirectory,
             Locale = options.M365Copilot.Locale,
             TimeZone = options.M365Copilot.TimeZone,
-            WorkspaceDirectory = options.M365Copilot.WorkspaceDirectory,
-            IncludeWorkspaceFiles = options.M365Copilot.IncludeWorkspaceFiles,
-            EnableWorkspaceWrites = options.M365Copilot.EnableWorkspaceWrites
+            WorkspaceDirectory = options.M365Copilot.WorkspaceDirectory
         }
     };
 

@@ -317,6 +317,132 @@ public class ClaudeProviderTests
         Assert.IsNull(result.Snapshot);
     }
 
+    [TestMethod]
+    public void BuildArguments_tool_mode_disables_built_in_tools_and_skips_permission_bypass()
+    {
+        var provider = CreateProvider();
+        var request = CreateToolRequest();
+
+        var arguments = provider.BuildArguments(request, _promptFilePath, "sess-789", true);
+
+        CollectionAssert.Contains(arguments, "--tools");
+        Assert.AreEqual(string.Empty, arguments[arguments.IndexOf("--tools") + 1]);
+        CollectionAssert.DoesNotContain(arguments, "--dangerously-skip-permissions");
+
+        // Uten disse to ville brukerens egne MCP-servere fortsatt vært tilgjengelige, og et kall
+        // til dem ville blokkert på et tillatelsesspørsmål ingen kan svare på i print-modus.
+        CollectionAssert.Contains(arguments, "--strict-mcp-config");
+        CollectionAssert.Contains(arguments, "--permission-prompts");
+        Assert.AreEqual("none", arguments[arguments.IndexOf("--permission-prompts") + 1]);
+    }
+
+    [TestMethod]
+    public async Task Execute_with_tools_returns_declared_call_from_fenced_response()
+    {
+        var shellRunner = new FakeStreamingShellRunner();
+        var provider = CreateProvider(shellRunner);
+        var request = CreateToolRequest();
+
+        shellRunner.QueueOutputLines([ToolCallDeltaLine("get_time", """{"city":"Oslo"}""")]);
+
+        var result = await provider.ExecuteWithToolsAsync(request, "session-tool");
+
+        Assert.IsNotNull(result.ToolCall);
+        Assert.AreEqual("get_time", result.ToolCall.Name);
+        Assert.AreEqual("""{"city":"Oslo"}""", result.ToolCall.ArgumentsJson);
+        Assert.AreEqual(string.Empty, result.Text);
+        CollectionAssert.Contains(shellRunner.LastArguments, "--tools");
+        CollectionAssert.DoesNotContain(shellRunner.LastArguments, "--dangerously-skip-permissions");
+    }
+
+    [TestMethod]
+    public async Task Execute_with_tools_returns_text_when_response_has_no_tool_fence()
+    {
+        var shellRunner = new FakeStreamingShellRunner();
+        var provider = CreateProvider(shellRunner);
+        var request = CreateToolRequest();
+
+        shellRunner.QueueOutputLines([TextDeltaLine("Klokka er 14:05 i Oslo.")]);
+
+        var result = await provider.ExecuteWithToolsAsync(request, "session-tool");
+
+        Assert.IsNull(result.ToolCall);
+        Assert.AreEqual("Klokka er 14:05 i Oslo.", result.Text);
+    }
+
+    [TestMethod]
+    public async Task Execute_with_tools_ignores_call_to_undeclared_function()
+    {
+        var shellRunner = new FakeStreamingShellRunner();
+        var provider = CreateProvider(shellRunner);
+        var request = CreateToolRequest();
+
+        shellRunner.QueueOutputLines([ToolCallDeltaLine("delete_everything", "{}")]);
+
+        var result = await provider.ExecuteWithToolsAsync(request, "session-tool");
+
+        Assert.IsNull(result.ToolCall);
+    }
+
+    [TestMethod]
+    public async Task Execute_with_tools_surfaces_the_cli_error_message_when_stderr_was_empty()
+    {
+        var shellRunner = new FakeStreamingShellRunner
+        {
+            ThrowAfterOutput = new InvalidOperationException("Kommando feilet: ")
+        };
+        var provider = CreateProvider(shellRunner);
+
+        shellRunner.QueueOutputLines([ErrorResultLine("You have hit your session limit")]);
+
+        var exception = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+            () => provider.ExecuteWithToolsAsync(CreateToolRequest(), "session-tool"));
+
+        StringAssert.Contains(exception.Message, "session limit");
+    }
+
+    [TestMethod]
+    public async Task Execute_streaming_does_not_emit_an_error_result_as_assistant_text()
+    {
+        var chunks = await StreamLinesAsync([SystemInitLine(), ErrorResultLine("noe gikk galt")]);
+
+        Assert.AreEqual(0, chunks.Count);
+    }
+
+    private string ErrorResultLine(string message)
+    {
+        return new JsonObject
+        {
+            ["type"] = "result",
+            ["is_error"] = true,
+            ["result"] = message
+        }.ToJsonString();
+    }
+
+    private OpenAiChatRequest CreateToolRequest()
+    {
+        var request = new OpenAiChatRequest
+        {
+            Model = "sonnet",
+            Messages = [new OpenAiMessage(OpenAiConstants.Roles.User, "Hva er klokka i Oslo?")]
+        };
+        request.FunctionTools.Add(new OpenAiFunctionTool("get_time", "Henter klokkeslett for en by", null));
+
+        return request;
+    }
+
+    private string ToolCallDeltaLine(string name, string argumentsJson)
+    {
+        var payload = new JsonObject
+        {
+            ["call_id"] = "call_1",
+            ["name"] = name,
+            ["arguments"] = JsonNode.Parse(argumentsJson)
+        }.ToJsonString();
+
+        return TextDeltaLine("```tool_call" + Environment.NewLine + payload + Environment.NewLine + "```");
+    }
+
     private async Task<List<string>> StreamLinesAsync(IEnumerable<string> lines)
     {
         var result = await StreamWithTodosAsync(lines);

@@ -80,6 +80,49 @@ public sealed class M365ToolProtocolTests
     }
 
     [TestMethod]
+    public void Try_parse_accepts_one_final_tool_fence_after_a_status_message()
+    {
+        var response = """
+            Presentasjonen er ikke med i det viste filutdraget, så jeg søker etter PowerPoint-filen i arbeidsområdet.
+
+            ```tool_call
+            {"call_id":"call_find_pptx","name":"read_file","arguments":{"path":"Uni_Hackathon_2026_Avare 5.pptx"}}
+            ```
+            """;
+
+        var parsed = M365ToolProtocol.TryParse(response, [ReadFile], out var call);
+
+        Assert.IsTrue(parsed);
+        Assert.IsNotNull(call);
+        Assert.AreEqual("call_find_pptx", call.CallId);
+        Assert.AreEqual("{\"path\":\"Uni_Hackathon_2026_Avare 5.pptx\"}", call.ArgumentsJson);
+    }
+
+    [TestMethod]
+    public void Try_parse_accepts_a_tool_fence_joined_to_the_status_message_without_a_line_break()
+    {
+        var bash = new OpenAiFunctionTool("bash", "Runs a command", JsonSerializer.SerializeToElement(new { type = "object" }));
+        var response = "Jeg undersøker først hvilke lysbilder som antyder en kommende demo.```tool_call\n" +
+            "{\"call_id\":\"call_inspect_presentation_text\",\"name\":\"bash\",\"arguments\":{\"command\":\"Get-Item 'Uni_Hackathon_2026_Avare 5.pptx'\"}}\n```";
+
+        var parsed = M365ToolProtocol.TryParse(response, [bash], out var call);
+
+        Assert.IsTrue(parsed);
+        Assert.IsNotNull(call);
+        Assert.AreEqual("call_inspect_presentation_text", call.CallId);
+        Assert.AreEqual("bash", call.Name);
+    }
+
+    [DataTestMethod]
+    [DataRow("Here is the payload:\n```json\n{\"name\":\"read_file\",\"arguments\":{}}\n```")]
+    [DataRow("Status.\n```tool_call\n{\"name\":\"read_file\",\"arguments\":{}}\n```\nDone.")]
+    [DataRow("Status.\n```tool_call\n{\"name\":\"read_file\",\"arguments\":{}}\n```\n```tool_call\n{\"name\":\"read_file\",\"arguments\":{}}\n```")]
+    public void Try_parse_rejects_prose_json_fences_trailing_text_and_multiple_tool_fences(string response)
+    {
+        Assert.IsFalse(M365ToolProtocol.TryParse(response, [ReadFile], out _));
+    }
+
+    [TestMethod]
     public void Tool_marker_with_invalid_json_is_recognized_as_a_tool_attempt()
     {
         Assert.IsTrue(M365ToolProtocol.IsToolFence("tool_call\n{{not valid json}}"));
@@ -152,6 +195,7 @@ public sealed class M365ToolProtocolTests
         StringAssert.Contains(prompt, "file contents");
         StringAssert.Contains(prompt, "existing workspace layout as fixed");
         StringAssert.Contains(prompt, "prioritize completing that file");
-        StringAssert.Contains(prompt, "workspace snapshot is read-only evidence");
+        StringAssert.Contains(prompt, "===FILE block");
+        StringAssert.Contains(prompt, "/mnt/data");
     }
 }

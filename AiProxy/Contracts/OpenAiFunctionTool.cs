@@ -31,10 +31,22 @@ public sealed class OpenAiChatTool
     [JsonPropertyName("function")]
     public OpenAiChatFunction? Function { get; set; }
 
-    public OpenAiFunctionTool? ToFunctionTool() =>
-        Type == OpenAiConstants.ToolCalls.FunctionType && !string.IsNullOrWhiteSpace(Function?.Name)
-            ? new OpenAiFunctionTool(Function.Name, Function.Description, Function.Parameters, Function.Strict)
-            : null;
+    /// <summary>Et custom tool nøstes under "custom" i stedet for "function".</summary>
+    [JsonPropertyName("custom")]
+    public OpenAiChatFunction? Custom { get; set; }
+
+    public OpenAiFunctionTool? ToFunctionTool()
+    {
+        if (Type != OpenAiConstants.ToolCalls.FunctionType && Type != OpenAiConstants.ToolCalls.CustomType)
+            return null;
+
+        var declaration = Function ?? Custom;
+
+        if (declaration == null || string.IsNullOrWhiteSpace(declaration.Name))
+            return null;
+
+        return new OpenAiFunctionTool(declaration.Name, declaration.Description, declaration.Parameters, declaration.Strict, Type);
+    }
 }
 
 public sealed class OpenAiChatFunction

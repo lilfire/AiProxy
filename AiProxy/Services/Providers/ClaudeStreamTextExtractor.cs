@@ -22,6 +22,12 @@ internal sealed class ClaudeStreamTextExtractor
     private bool _hasStreamedBlockText;
     private bool _hasEmittedText;
 
+    /// <summary>
+    /// Satt når CLI-en avsluttet turen med en feil. Meldingen kommer bare i result-linjen, så
+    /// uten denne står kalleren igjen med en tom feil når prosessen avslutter med kode 1.
+    /// </summary>
+    public string? ErrorMessage { get; private set; }
+
     public ClaudeStreamTextExtractor(Func<string, CancellationToken, Task> onChunk, ITodoSnapshotStore todoStore)
     {
         ArgumentNullException.ThrowIfNull(onChunk);
@@ -64,8 +70,16 @@ internal sealed class ClaudeStreamTextExtractor
             return;
         }
 
-        if (streamEvent.Type == ClaudeStreamConstants.ResultEventType)
-            await EmitResultTextAsync(streamEvent.Result, cancellationToken);
+        if (streamEvent.Type != ClaudeStreamConstants.ResultEventType)
+            return;
+
+        if (streamEvent.IsError)
+        {
+            ErrorMessage = streamEvent.Result;
+            return;
+        }
+
+        await EmitResultTextAsync(streamEvent.Result, cancellationToken);
     }
 
     private async Task EmitPartialTextAsync(JsonElement streamEventBody, CancellationToken cancellationToken)

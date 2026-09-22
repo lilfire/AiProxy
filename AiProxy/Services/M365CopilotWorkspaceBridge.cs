@@ -6,8 +6,9 @@ namespace AiProxy.Services;
 
 /// <summary>
 /// Supplies M365 Copilot with a bounded snapshot of the local workspace. The
-/// M365 chat service cannot read local files itself, so this is the equivalent
-/// of m365-copilot-cli's <c>--dir</c> and <c>--write</c> options.
+/// M365 chat service cannot read local files itself. Every M365 request therefore
+/// receives a bounded, secret-filtered snapshot and can write back only the files
+/// in that snapshot. This is automatic; callers do not need CLI-style flags.
 /// </summary>
 public sealed class M365CopilotWorkspaceBridge
 {
@@ -32,6 +33,11 @@ public sealed class M365CopilotWorkspaceBridge
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
         ".db", ".sqlite", ".sqlite3", ".map", ".pem", ".key", ".pfx", ".p12"
     };
+    private static readonly HashSet<string> SecretExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pem", ".key", ".pfx", ".p12"
+    };
+    private const int MaxOmittedFileNames = 200;
     private static readonly HashSet<string> SkippedFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "Cargo.lock"
@@ -46,19 +52,23 @@ public sealed class M365CopilotWorkspaceBridge
         _logger = logger;
     }
 
-    public async Task<M365WorkspacePrompt> BuildPromptAsync(string prompt, M365CopilotOptions options, CancellationToken cancellationToken)
+    public async Task<M365WorkspacePrompt> BuildPromptAsync(
+        string prompt,
+        M365CopilotOptions options,
+        CancellationToken cancellationToken,
+        string? activeWorkspaceDirectory = null,
+        bool clientToolsDeclared = false)
     {
-        if (!options.IncludeWorkspaceFiles)
-            return new M365WorkspacePrompt(prompt, new Dictionary<string, string>(), false);
-
-        var root = ResolveWorkspaceDirectory(options.WorkspaceDirectory);
+        // The active OpenCode workspace is request-scoped and must win over the
+        // server-wide fallback configured on the administration page.
+        var root = ResolveWorkspaceDirectory(activeWorkspaceDirectory ?? options.WorkspaceDirectory);
         if (!Directory.Exists(root))
         {
             _logger.LogWarning("M365-workspace {Workspace} finnes ikke; forespørselen sendes uten filer.", root);
             return new M365WorkspacePrompt(prompt, new Dictionary<string, string>(), false);
         }
 
-        var files = await CollectFilesAsync(root, cancellationToken);
+        var (files, omittedFiles) = await CollectFilesAsync(root, cancellationToken);
         var blocks = string.Join("\n\n", files.Select(file => $"--- file: {file.Label} ---\n{file.Content}\n--- end file ---"));
         var augmentedPrompt = new StringBuilder(prompt);
 
@@ -69,18 +79,33 @@ public sealed class M365CopilotWorkspaceBridge
             augmentedPrompt.Append(blocks);
         }
 
-        if (options.EnableWorkspaceWrites && files.Count > 0)
+        // Without this list the model concludes that a binary document such as a .pptx
+        // does not exist, because the snapshot is presented as the source of truth.
+        if (omittedFiles.Count > 0)
+        {
+            augmentedPrompt.Append("\n\nThese workspace files also exist, but their content is not shown (binary, Office document, or too large):\n");
+            augmentedPrompt.Append(string.Join("\n", omittedFiles.Take(MaxOmittedFileNames).Select(label => "- " + label)));
+            if (omittedFiles.Count > MaxOmittedFileNames)
+                augmentedPrompt.Append($"\n- ... and {omittedFiles.Count - MaxOmittedFileNames} more");
+        }
+
+        // The m365-copilot-cli `ask --dir --write` flow: complete-file blocks for snapshot files
+        // are written back locally. M365 follows this far more reliably than a tool protocol, so
+        // it stays available when the client also declares tools.
+        if (files.Count > 0)
         {
             augmentedPrompt.Append("\n\nWhen you make a change to a file in the snapshot, output the COMPLETE new content of that file exactly in this format, without a Markdown fence:\n");
             augmentedPrompt.Append("===FILE: <path exactly as shown above>===\n<complete new file content>\n===END FILE===\n");
-            augmentedPrompt.Append("Only emit a block for a file you are changing. Files outside the snapshot cannot be created or changed.");
+            augmentedPrompt.Append(clientToolsDeclared
+                ? "Only emit a block for a file you are changing. A block is saved to the local file automatically. Other files, including those whose content is not shown, can only be created or changed through a declared client function."
+                : "Only emit a block for a file you are changing. Files outside the snapshot cannot be created or changed.");
         }
 
         _logger.LogInformation("La ved {FileCount} workspace-filer ({ByteCount} byte) for M365 Copilot fra {Workspace}.", files.Count, files.Sum(file => file.ByteCount), root);
         return new M365WorkspacePrompt(
             augmentedPrompt.ToString(),
             files.ToDictionary(file => NormalizeLabel(file.Label), file => file.FullPath, StringComparer.OrdinalIgnoreCase),
-            options.EnableWorkspaceWrites && files.Count > 0);
+            files.Count > 0);
     }
 
     public async Task<M365WorkspaceWriteResult> ApplyWritesAsync(string answer, M365WorkspacePrompt workspace, bool createBackups, CancellationToken cancellationToken)
@@ -111,6 +136,7 @@ public sealed class M365CopilotWorkspaceBridge
                 if (createBackups && File.Exists(path))
                     File.Copy(path, path + ".bak", overwrite: true);
 
+                content = await PreserveFinalNewlineAsync(path, content, cancellationToken);
                 await File.WriteAllTextAsync(path, content, Utf8WithoutBom, cancellationToken);
                 written.Add(label.Trim());
             }
@@ -135,9 +161,25 @@ public sealed class M365CopilotWorkspaceBridge
         return new M365WorkspaceWriteResult(cleaned, written);
     }
 
-    private async Task<List<WorkspaceFile>> CollectFilesAsync(string root, CancellationToken cancellationToken)
+    /// <summary>
+    /// The block format consumes the line break before ===END FILE===, so a file that ended
+    /// with a newline would otherwise lose it on every write.
+    /// </summary>
+    private static async Task<string> PreserveFinalNewlineAsync(string path, string content, CancellationToken cancellationToken)
+    {
+        if (content.EndsWith('\n') || !File.Exists(path))
+            return content;
+
+        var original = await File.ReadAllTextAsync(path, cancellationToken);
+        return original.EndsWith("\r\n", StringComparison.Ordinal) ? content + "\r\n"
+            : original.EndsWith('\n') ? content + "\n"
+            : content;
+    }
+
+    private async Task<(List<WorkspaceFile> Included, List<string> Omitted)> CollectFilesAsync(string root, CancellationToken cancellationToken)
     {
         var candidates = new List<FileInfo>();
+        var omitted = new List<string>();
         var stack = new Stack<DirectoryInfo>();
         stack.Push(new DirectoryInfo(root));
 
@@ -157,6 +199,10 @@ public sealed class M365CopilotWorkspaceBridge
                     else if (child is FileInfo file && !ShouldSkipFile(file.Name))
                     {
                         candidates.Add(file);
+                    }
+                    else if (child is FileInfo binaryFile && IsListableBinaryFile(binaryFile.Name))
+                    {
+                        omitted.Add(Path.GetRelativePath(root, binaryFile.FullName));
                     }
                 }
             }
@@ -178,11 +224,17 @@ public sealed class M365CopilotWorkspaceBridge
             try
             {
                 if (file.Length > MaxFileBytes || usedBytes + file.Length > MaxWorkspaceBytes)
+                {
+                    omitted.Add(Path.GetRelativePath(root, file.FullName));
                     continue;
+                }
 
                 var content = await File.ReadAllTextAsync(file.FullName, cancellationToken);
                 if (content.Contains('\0'))
+                {
+                    omitted.Add(Path.GetRelativePath(root, file.FullName));
                     continue;
+                }
 
                 usedBytes += file.Length;
                 included.Add(new WorkspaceFile(Path.GetRelativePath(root, file.FullName), file.FullName, content, file.Length));
@@ -197,7 +249,8 @@ public sealed class M365CopilotWorkspaceBridge
             }
         }
 
-        return included;
+        omitted.Sort(StringComparer.OrdinalIgnoreCase);
+        return (included, omitted);
     }
 
     private string ResolveWorkspaceDirectory(string? configuredDirectory) =>
@@ -211,6 +264,12 @@ public sealed class M365CopilotWorkspaceBridge
         name.EndsWith(".min.css", StringComparison.OrdinalIgnoreCase) ||
         LooksLikeSecret(name) ||
         SkippedExtensions.Contains(Path.GetExtension(name));
+
+    /// <summary>Secret, lock and minified files stay unlisted; only their content type excluded them.</summary>
+    private static bool IsListableBinaryFile(string name) =>
+        SkippedExtensions.Contains(Path.GetExtension(name)) &&
+        !LooksLikeSecret(name) &&
+        !SecretExtensions.Contains(Path.GetExtension(name));
 
     private static bool LooksLikeSecret(string name) =>
         name.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||

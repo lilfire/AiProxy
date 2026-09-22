@@ -1,14 +1,16 @@
 using AiProxy.Contracts;
+using AiProxy.Services.Tools;
 
 namespace AiProxy.Services.Providers;
 
-public sealed class CodexProvider : IChatProvider
+public sealed class CodexProvider : IChatProvider, IToolAwareChatProvider
 {
     private readonly ILogger<CodexProvider> _logger;
     private readonly ShellCommandRunner _commandRunner;
     private readonly ProviderSessionStore _sessionStore;
     private readonly IPromptFileWriter _promptFileWriter;
     private readonly IImageInputResolver _imageInputResolver;
+    private readonly CliClientToolRunner _toolRunner = new(OpenAiConstants.Providers.Codex);
 
     private readonly IReadOnlyList<string> _defaultModelIds = new List<string>
     {
@@ -56,6 +58,34 @@ public sealed class CodexProvider : IChatProvider
         }
     }
 
+    public async Task<OpenAiToolExecutionResult> ExecuteWithToolsAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
+    {
+        if (request.Messages.Any(message => message.Images.Count > 0))
+            return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
+
+        var basePrompt = BuildPrompt(ClientToolMessageFilter.WithoutToolExchange(request.Messages));
+
+        return await _toolRunner.RunAsync(
+            request,
+            basePrompt,
+            (prompt, ct) => RunPromptAsync(request, sessionId, prompt, ct),
+            cancellationToken);
+    }
+
+    private async Task<string> RunPromptAsync(OpenAiChatRequest request, string sessionId, string prompt, CancellationToken cancellationToken)
+    {
+        var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, "codex", prompt, cancellationToken);
+
+        try
+        {
+            return await ExecuteWithSessionRecoveryAsync(request, sessionId, promptFilePath, [], cancellationToken);
+        }
+        finally
+        {
+            _promptFileWriter.TryDelete(promptFilePath);
+        }
+    }
+
     private async Task<string> ExecuteWithSessionRecoveryAsync(OpenAiChatRequest request, string sessionId, string promptFilePath, IReadOnlyList<string> imagePaths, CancellationToken cancellationToken)
     {
         var prompt = await File.ReadAllTextAsync(promptFilePath, cancellationToken);
@@ -91,7 +121,11 @@ public sealed class CodexProvider : IChatProvider
         // outside the project. `--add-dir` is not honoured by Codex' non-interactive
         // filesystem tool on Windows, so use the same unrestricted provider policy
         // already used for Claude.
-        var arguments = new List<string> { "exec", "--dangerously-bypass-approvals-and-sandbox" };
+        // Codex har ingen måte å fjerne sine egne verktøy. Read-only-sandkassen er det nærmeste:
+        // den hindrer CLI-en fra å skrive selv, så endringer må gå gjennom klientens verktøy.
+        var arguments = request.FunctionTools.Count > 0
+            ? new List<string> { "exec", "--sandbox", "read-only" }
+            : new List<string> { "exec", "--dangerously-bypass-approvals-and-sandbox" };
 
         if (!isNewSession)
         {

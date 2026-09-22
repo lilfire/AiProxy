@@ -63,6 +63,7 @@ public sealed class ResponsesService : IResponsesService
             EnsureImageSupport(chatRequest, resolution);
             var toolProvider = resolution.Provider as IToolAwareChatProvider;
             var toolMode = toolProvider != null && chatRequest.FunctionTools.Count > 0;
+            LogClientTools(resolution.Provider.Name, toolMode, chatRequest.FunctionTools);
             var todoSchema = toolMode ? new TodoToolSchema(false, string.Empty, false, false) : _todoToolBridge.ReadClientSchema(request);
             var todoOutput = toolMode ? null : _todoOutputProtocol.CreateSession(todoSchema);
 
@@ -100,6 +101,23 @@ public sealed class ResponsesService : IResponsesService
             _sessionHistory.FailTurn(turnId, exception);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Gjør det synlig i loggen om klientens verktøy faktisk nådde provideren, og hvilke. Uten
+    /// dette er et svar om at et verktøy «ikke er tilkoblet» umulig å skille fra at proxyen
+    /// droppet deklarasjonen.
+    /// </summary>
+    private void LogClientTools(string providerName, bool toolMode, IReadOnlyList<OpenAiFunctionTool> tools)
+    {
+        if (!toolMode)
+        {
+            _logger.LogInformation("Verktøymodus av for {ProviderName}: {ToolCount} klientverktøy deklarert", providerName, tools.Count);
+            return;
+        }
+
+        _logger.LogInformation("Verktøymodus på for {ProviderName} med {ToolCount} klientverktøy: {ToolNames}",
+            providerName, tools.Count, string.Join(", ", tools.Select(tool => tool.Name)));
     }
 
     private async Task<IResult> ExecuteToolNonStreamingAsync(OpenAiChatRequest request, string sessionId, ModelResolution resolution, IToolAwareChatProvider provider, string turnId, CancellationToken cancellationToken)

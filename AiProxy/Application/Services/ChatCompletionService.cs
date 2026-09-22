@@ -18,6 +18,7 @@ public sealed class ChatCompletionService : IChatCompletionService
     private readonly ISessionHistoryStore _sessionHistory;
     private readonly string _chunkObject = OpenAiConstants.ChatCompletionChunkObject;
     private readonly string _stopReason = OpenAiConstants.FinishReasons.Stop;
+    private readonly string _toolCallsReason = OpenAiConstants.FinishReasons.ToolCalls;
 
     public ChatCompletionService(
         IChatProviderRegistry registry,
@@ -50,6 +51,9 @@ public sealed class ChatCompletionService : IChatCompletionService
             var providerRequest = _requestFactory.CreateProviderRequest(request, resolution);
             _sessionHistory.SetProvider(turnId, resolution.Provider.Name, resolution.DisplayModelId);
 
+            var toolMode = resolution.Provider is IToolAwareChatProvider && providerRequest.FunctionTools.Count > 0;
+            LogClientTools(resolution.Provider.Name, toolMode, providerRequest.FunctionTools);
+
             if (resolution.Provider is IToolAwareChatProvider toolProvider && providerRequest.FunctionTools.Count > 0)
             {
                 if (request.Stream)
@@ -70,6 +74,21 @@ public sealed class ChatCompletionService : IChatCompletionService
         }
     }
 
+    /// <summary>
+    /// Gjør det synlig i loggen om klientens verktøy faktisk nådde provideren, og hvilke.
+    /// </summary>
+    private void LogClientTools(string providerName, bool toolMode, IReadOnlyList<OpenAiFunctionTool> tools)
+    {
+        if (!toolMode)
+        {
+            _logger.LogInformation("Verktøymodus av for {ProviderName}: {ToolCount} klientverktøy deklarert", providerName, tools.Count);
+            return;
+        }
+
+        _logger.LogInformation("Verktøymodus på for {ProviderName} med {ToolCount} klientverktøy: {ToolNames}",
+            providerName, tools.Count, string.Join(", ", tools.Select(tool => tool.Name)));
+    }
+
     private async Task<IResult> ExecuteToolNonStreamingAsync(OpenAiChatRequest request, string sessionId, ModelResolution resolution, IToolAwareChatProvider provider, string turnId, CancellationToken cancellationToken)
     {
         var result = await provider.ExecuteWithToolsAsync(request, sessionId, cancellationToken);
@@ -77,7 +96,7 @@ public sealed class ChatCompletionService : IChatCompletionService
         var message = result.ToolCall == null
             ? new OpenAiMessage(OpenAiConstants.Roles.Assistant, result.Text)
             : CreateToolCallMessage(result.ToolCall);
-        var finish = result.ToolCall == null ? _stopReason : "tool_calls";
+        var finish = result.ToolCall == null ? _stopReason : _toolCallsReason;
         _sessionHistory.CompleteTurn(turnId, result.Text);
         return Results.Json(new OpenAiChatResponse(GenerateId(), resolution.DisplayModelId)
         {
@@ -104,7 +123,7 @@ public sealed class ChatCompletionService : IChatCompletionService
                 else
                 {
                     await WriteChunkAsync(writer, stream, CreateChunk(resolution.DisplayModelId, CreateToolCallMessage(result.ToolCall, includeStreamIndex: true), null), cancellationToken);
-                    await WriteChunkAsync(writer, stream, CreateChunk(resolution.DisplayModelId, new OpenAiMessage(string.Empty, null), "tool_calls"), cancellationToken);
+                    await WriteChunkAsync(writer, stream, CreateChunk(resolution.DisplayModelId, new OpenAiMessage(string.Empty, null), _toolCallsReason), cancellationToken);
                 }
                 _sessionHistory.CompleteTurn(turnId, result.Text);
                 await writer.WriteAsync(_streamFormatter.FormatSseDoneEvent().AsMemory(), cancellationToken);
@@ -125,6 +144,7 @@ public sealed class ChatCompletionService : IChatCompletionService
             {
                 Index = includeStreamIndex ? 0 : null,
                 Id = call.CallId,
+                Type = call.Type,
                 Function = new OpenAiChatToolFunction { Name = call.Name, Arguments = call.ArgumentsJson }
             }]
         };
@@ -133,12 +153,27 @@ public sealed class ChatCompletionService : IChatCompletionService
     {
         foreach (var message in request.Messages)
         {
+            // En ny brukermelding avslutter forrige verktøyløkke. Bare utvekslingen etter den
+            // siste er nødvendig for å fortsette, og uten nullstillingen ville hele historikken
+            // blitt gjentatt i prompten for hver tur.
+            if (message.Role == OpenAiConstants.Roles.User)
+            {
+                request.PreviousToolCalls.Clear();
+                request.ToolResults.Clear();
+                request.HasToolResultsSinceLastUserMessage = false;
+                continue;
+            }
+
             if (message.ToolCalls != null)
                 request.PreviousToolCalls.AddRange(message.ToolCalls
                     .Where(call => call.Type == OpenAiConstants.ToolCalls.FunctionType && !string.IsNullOrWhiteSpace(call.Id) && !string.IsNullOrWhiteSpace(call.Function.Name))
                     .Select(call => new OpenAiToolCall(call.Id, call.Function.Name, call.Function.Arguments)));
-            if (message.Role == "tool" && !string.IsNullOrWhiteSpace(message.ToolCallId))
+
+            if (message.Role == OpenAiConstants.Roles.Tool && !string.IsNullOrWhiteSpace(message.ToolCallId))
+            {
                 request.ToolResults.Add(new OpenAiToolResult(message.ToolCallId, message.Content ?? string.Empty));
+                request.HasToolResultsSinceLastUserMessage = true;
+            }
         }
     }
 

@@ -39,4 +39,11 @@ public class OpenAiChatRequest
 
     [JsonIgnore]
     public List<OpenAiToolResult> ToolResults { get; set; } = new();
+
+    /// <summary>
+    /// Klienten har returnert et verktøyresultat etter siste brukermelding, altså fortsetter
+    /// forespørselen en verktøyløkke i stedet for å starte en ny brukerforespørsel.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasToolResultsSinceLastUserMessage { get; set; }
 }

@@ -1,9 +1,10 @@
 using System.Text;
 using AiProxy.Contracts;
+using AiProxy.Services.Tools;
 
 namespace AiProxy.Services.Providers;
 
-public sealed class ClaudeProvider : IChatProvider
+public sealed class ClaudeProvider : IChatProvider, IToolAwareChatProvider
 {
     private readonly ILogger<ClaudeProvider> _logger;
     private readonly ShellCommandRunner _commandRunner;
@@ -13,6 +14,7 @@ public sealed class ClaudeProvider : IChatProvider
     private readonly IImageInputResolver _imageInputResolver;
 
     private readonly IReadOnlyList<string> _defaultModelIds;
+    private readonly CliClientToolRunner _toolRunner = new(OpenAiConstants.Providers.Claude);
     private readonly string _executableName = "claude";
     private readonly string _promptFilePrefix = "claude";
 
@@ -84,6 +86,48 @@ public sealed class ClaudeProvider : IChatProvider
         }
     }
 
+    public async Task<OpenAiToolExecutionResult> ExecuteWithToolsAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
+    {
+        // Med tomt --tools har CLI-en ingen leseverktøy, så @-referansene til bilder ville vært
+        // uleselige. Bildeturer besvares derfor som vanlig tekst, slik M365-provideren også gjør.
+        if (request.Messages.Any(message => message.Images.Count > 0))
+            return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
+
+        var basePrompt = ImagePromptBuilder.Build(ClientToolMessageFilter.WithoutToolExchange(request.Messages), []);
+
+        return await _toolRunner.RunAsync(
+            request,
+            basePrompt,
+            (prompt, ct) => RunPromptAsync(request, sessionId, prompt, ct),
+            cancellationToken);
+    }
+
+    private async Task<string> RunPromptAsync(OpenAiChatRequest request, string sessionId, string prompt, CancellationToken cancellationToken)
+    {
+        var promptFilePath = await _promptFileWriter.WritePromptFileAsync(sessionId, _promptFilePrefix, prompt, cancellationToken);
+        var textBuilder = new StringBuilder();
+
+        try
+        {
+            await ExecuteWithSessionRecoveryStreamingAsync(
+                request,
+                sessionId,
+                promptFilePath,
+                (chunk, _) =>
+                {
+                    textBuilder.Append(chunk);
+                    return Task.CompletedTask;
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            _promptFileWriter.TryDelete(promptFilePath);
+        }
+
+        return textBuilder.ToString();
+    }
+
     internal List<string> BuildArguments(OpenAiChatRequest request, string promptFilePath, string providerSessionId, bool isNewSession)
     {
         var arguments = new List<string>();
@@ -107,7 +151,26 @@ public sealed class ClaudeProvider : IChatProvider
         arguments.Add("stream-json");
         arguments.Add("--include-partial-messages");
         arguments.Add("--verbose");
-        arguments.Add("--dangerously-skip-permissions");
+
+        // Når klienten har deklarert verktøy, skal CLI-en ikke gjøre jobben selv: den må returnere
+        // et kall klienten utfører. Alle tre flaggene er nødvendige:
+        //   --tools ""            fjerner de innebygde verktøyene
+        //   --strict-mcp-config   utelater brukerens egne MCP-servere, som ellers ville gitt
+        //                         CLI-en et helt annet verktøysett enn klientens
+        //   --permission-prompts  avviser i stedet for å vente på en vert som ikke finnes i
+        //     none                print-modus; ellers blokkerer et kall til AiProxy tidsavbryter
+        if (request.FunctionTools.Count > 0)
+        {
+            arguments.Add("--tools");
+            arguments.Add(string.Empty);
+            arguments.Add("--strict-mcp-config");
+            arguments.Add("--permission-prompts");
+            arguments.Add("none");
+        }
+        else
+        {
+            arguments.Add("--dangerously-skip-permissions");
+        }
 
         return arguments;
     }
@@ -162,6 +225,14 @@ public sealed class ClaudeProvider : IChatProvider
         catch (InvalidOperationException ex) when (!sessionResult.WasCreated && IsSessionMissingError(ex.Message))
         {
             await RecreateSessionAndStreamAsync(request, sessionId, promptFilePath, onChunk, cancellationToken);
+        }
+        // Claude CLI skriver API-feil til result-linjen og lar stderr være tom, så uten dette
+        // blir feilen som når klienten stående uten melding i det hele tatt.
+        catch (InvalidOperationException ex) when (!string.IsNullOrWhiteSpace(extractor.ErrorMessage))
+        {
+            _logger.LogError("{ProviderName} avsluttet turen med feil: {Error}", Name, extractor.ErrorMessage);
+
+            throw new InvalidOperationException($"{Name} avsluttet turen med feil: {extractor.ErrorMessage}", ex);
         }
     }
 
