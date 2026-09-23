@@ -10,37 +10,30 @@ public sealed class CodexProvider : IChatProvider, IToolAwareChatProvider
     private readonly ProviderSessionStore _sessionStore;
     private readonly IPromptFileWriter _promptFileWriter;
     private readonly IImageInputResolver _imageInputResolver;
+    private readonly CodexModelCatalog _modelCatalog;
     private readonly CliClientToolRunner _toolRunner = new(OpenAiConstants.Providers.Codex);
-
-    private readonly IReadOnlyList<string> _defaultModelIds = new List<string>
-    {
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4-mini"
-    };
 
     public CodexProvider(
         ILogger<CodexProvider> logger,
         ShellCommandRunner commandRunner,
         ProviderSessionStore sessionStore,
         IPromptFileWriter promptFileWriter,
-        IImageInputResolver imageInputResolver)
+        IImageInputResolver imageInputResolver,
+        CodexModelCatalog modelCatalog)
     {
         _logger = logger;
         _commandRunner = commandRunner;
         _sessionStore = sessionStore;
         _promptFileWriter = promptFileWriter;
         _imageInputResolver = imageInputResolver;
+        _modelCatalog = modelCatalog;
     }
 
     public string Name => OpenAiConstants.Providers.Codex;
     public bool SupportsImages => true;
 
-    public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(_defaultModelIds);
-    }
+    public Task<IReadOnlyList<string>> GetModelIdsAsync(CancellationToken cancellationToken = default) =>
+        _modelCatalog.GetModelIdsAsync(cancellationToken);
 
     public async Task<string> ExecuteAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
     {

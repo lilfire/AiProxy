@@ -44,7 +44,7 @@ async function fetchModels(baseUrl: string): Promise<OpenAiModelsResponse>
         })
 
         request.on("error", (error: Error) => reject(error))
-        request.setTimeout(5000, () =>
+        request.setTimeout(40000, () =>
         {
             request.destroy()
             reject(new Error("Timeout ved henting av modeller"))

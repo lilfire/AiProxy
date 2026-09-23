@@ -16,7 +16,8 @@ public class CodexProviderTests
             new ShellCommandRunner(new ExecutablePathResolver(), NullLogger<ShellCommandRunner>.Instance, new TestRuntimeSettings()),
             new ProviderSessionStore(),
             new PromptFileWriter(),
-            new ImageInputResolver());
+            new ImageInputResolver(),
+            CreateCatalog());
 
         var arguments = provider.BuildArguments(new OpenAiChatRequest { Model = "gpt-5.6" }, "session-1", true, []);
 
@@ -43,5 +44,10 @@ public class CodexProviderTests
             new ShellCommandRunner(new ExecutablePathResolver(), NullLogger<ShellCommandRunner>.Instance, new TestRuntimeSettings()),
             new ProviderSessionStore(),
             new PromptFileWriter(),
-            new ImageInputResolver());
+            new ImageInputResolver(),
+            CreateCatalog());
+
+    private static CodexModelCatalog CreateCatalog() => new(
+        new ShellCommandRunner(new ExecutablePathResolver(), NullLogger<ShellCommandRunner>.Instance, new TestRuntimeSettings()),
+        NullLogger<CodexModelCatalog>.Instance);
 }

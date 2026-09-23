@@ -45,6 +45,7 @@ builder.Services.AddSingleton<M365CopilotTokenProvider>();
 builder.Services.AddSingleton<IM365CopilotBrowserClient, M365CopilotBrowserClient>();
 builder.Services.AddSingleton<M365CopilotWorkspaceBridge>();
 builder.Services.AddSingleton<IModelIdCache, ModelIdCache>();
+builder.Services.AddSingleton<CodexModelCatalog>();
 builder.Services.AddSingleton<IPromptFileWriter, PromptFileWriter>();
 builder.Services.AddSingleton<IImageInputResolver, ImageInputResolver>();
 

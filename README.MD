@@ -27,7 +27,7 @@ Prosjektet er bygget med ASP.NET Core og .NET 9. Standardadressen er `http://127
 | Aigravity | `agy` CLI | Dynamisk via `agy models` | Ja |
 | Grok | `grok` CLI | Dynamisk via `grok models` | Ja |
 | Claude | `claude` CLI | Innebygd modelliste | Ja |
-| Codex | `codex` CLI | Innebygd modelliste | Ja |
+| Codex | `codex` CLI | Dynamisk via App Server `model/list` | Ja |
 | M365 | Microsoft 365 Copilot ChatHub og nettleserprofil for vedlegg | Innebygd modelliste | Ja |
 
 AiProxy bruker eksisterende lokal innlogging for de installerte provider-CLI-ene. M365-provideren bruker en lokal MSAL-token-cache eller en kompatibel token-cache fra `m365-copilot-cli`.
@@ -99,7 +99,7 @@ AiProxy eksponerer disse offentlige endepunktene:
 Invoke-RestMethod http://127.0.0.1:3489/v1/models
 ```
 
-Modeller eksponeres normalt som `<Provider>-<modell>`, for eksempel `Claude-sonnet`. Hvis modellen har et konfigurert alias, brukes aliaset som synlig modell-ID.
+Modeller eksponeres normalt som `<Provider>-<modell>`, for eksempel `Claude-sonnet`. Hvis modellen har et konfigurert alias, brukes aliaset som synlig modell-ID. Codex-modellene hentes fra modellene som vises i den innloggede Codex-klienten. Siste vellykkede liste lagres i `%LOCALAPPDATA%\AiProxy\codex-models.json` og brukes dersom et nytt oppslag feiler, også etter omstart. Uten en lagret liste vises ingen Codex-modeller før oppslaget lykkes.
 
 ### Chat Completions
 
@@ -375,7 +375,7 @@ Kontroller at providerens CLI er installert, innlogget og tilgjengelig på `PATH
 
 Kontroller at provideren er aktivert. Bruk deretter `Oppdater oppdagelse` under `/admin/models`.
 
-Aigravity og Grok henter modellene fra CLI-en. Claude, Codex og M365 bruker innebygde modellister.
+Aigravity og Grok henter modellene fra CLI-en. Codex henter modellene fra App Server, mens Claude og M365 bruker innebygde modellister. Hvis Codex-oppslaget feiler, vises siste lagrede liste.
 
 ### M365 ber om innlogging
 
