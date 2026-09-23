@@ -63,6 +63,7 @@ public sealed class CodexProvider : IChatProvider, IToolAwareChatProvider
         if (request.Messages.Any(message => message.Images.Count > 0))
             return new OpenAiToolExecutionResult(await ExecuteAsync(request, sessionId, cancellationToken), null);
 
+        ClientToolManifest.LogProviderManifest(Name, request.FunctionTools, _logger);
         var basePrompt = BuildPrompt(ClientToolMessageFilter.WithoutToolExchange(request.Messages));
 
         return await _toolRunner.RunAsync(

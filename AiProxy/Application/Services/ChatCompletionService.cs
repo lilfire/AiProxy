@@ -4,6 +4,7 @@ using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
 using AiProxy.Services;
 using AiProxy.Services.Sessions;
+using AiProxy.Services.Tools;
 using Microsoft.AspNetCore.Http;
 
 namespace AiProxy.Application.Services;
@@ -38,10 +39,7 @@ public sealed class ChatCompletionService : IChatCompletionService
 
     public async Task<IResult> ExecuteAsync(OpenAiChatRequest request, string sessionId, CancellationToken cancellationToken = default)
     {
-        request.FunctionTools = request.Tools?
-            .Select(tool => tool.ToFunctionTool())
-            .OfType<OpenAiFunctionTool>()
-            .ToList() ?? [];
+        request.FunctionTools = ClientToolManifest.Normalize(request.Tools, "chat/completions", _logger);
         PopulateChatToolContext(request);
         var turnId = _sessionHistory.StartTurn(sessionId, "chat/completions", request.Model, ToSessionMessages(request));
         try

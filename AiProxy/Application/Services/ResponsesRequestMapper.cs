@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AiProxy.Application.Interfaces;
 using AiProxy.Contracts;
+using AiProxy.Services.Tools;
 
 namespace AiProxy.Application.Services;
 
@@ -27,10 +28,7 @@ public sealed class ResponsesRequestMapper : IResponsesRequestMapper
             MaxTokens = request.MaxTokens,
             WorkingDirectory = request.WorkingDirectory,
             ToolChoice = request.ToolChoice?.Clone(),
-            FunctionTools = request.Tools?
-                .Select(tool => tool.ToCallableTool())
-                .OfType<OpenAiFunctionTool>()
-                .ToList() ?? [],
+            FunctionTools = ClientToolManifest.Normalize(request.Tools, "responses", _logger),
             PreviousToolCalls = ExtractToolCalls(request.Input),
             ToolResults = ExtractToolResults(request.Input),
             HasToolResultsSinceLastUserMessage = HasToolResultsSinceLastUserMessage(request.Input)

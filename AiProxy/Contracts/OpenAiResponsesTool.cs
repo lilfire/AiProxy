@@ -21,8 +21,35 @@ public class OpenAiResponsesTool
     [JsonPropertyName("strict")]
     public bool? Strict { get; set; }
 
-    public OpenAiFunctionTool? ToCallableTool() =>
-        (Type == OpenAiConstants.ToolCalls.FunctionType || Type == OpenAiConstants.ToolCalls.CustomType) && !string.IsNullOrWhiteSpace(Name)
-            ? new OpenAiFunctionTool(Name, Description, Parameters, Strict, Type)
-            : null;
+    /// <summary>
+    /// Enkelte OpenAI-kompatible klienter gjenbruker Chat Completions-formen i en Responses-forespørsel.
+    /// Støtt den nestede deklarasjonen også, men behold Responses sin flate form som førstevalg.
+    /// </summary>
+    [JsonPropertyName("function")]
+    public OpenAiChatFunction? Function { get; set; }
+
+    [JsonPropertyName("custom")]
+    public OpenAiChatFunction? Custom { get; set; }
+
+    [JsonIgnore]
+    public string? NameOrNestedName =>
+        !string.IsNullOrWhiteSpace(Name) ? Name : Function?.Name ?? Custom?.Name;
+
+    public OpenAiFunctionTool? ToCallableTool()
+    {
+        if (Type != OpenAiConstants.ToolCalls.FunctionType && Type != OpenAiConstants.ToolCalls.CustomType)
+            return null;
+
+        var nested = Type == OpenAiConstants.ToolCalls.CustomType ? Custom ?? Function : Function ?? Custom;
+        var name = !string.IsNullOrWhiteSpace(Name) ? Name : nested?.Name;
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        return new OpenAiFunctionTool(
+            name,
+            Description ?? nested?.Description,
+            Parameters ?? nested?.Parameters,
+            Strict ?? nested?.Strict,
+            Type);
+    }
 }

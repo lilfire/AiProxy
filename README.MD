@@ -385,6 +385,16 @@ Aktiver interaktiv innlogging under `/admin/m365`, start tjenesten fra en intera
 
 Send samme `X-ShellAi-Session`, `X-Session-Id` eller `X-Session-Affinity` på alle turene i samtalen.
 
+### Et MCP-verktøy mangler i en modellforespørsel
+
+MCP-servere eies av klienten (for eksempel OpenCode og MetaMCP); AiProxy starter ikke
+eller autentiserer dem. For hver forespørsel logger AiProxy den mottatte,
+normaliserte og — for Codex — videresendte verktøykatalogen som `type:name`, uten
+schemaer eller argumenter. Sammenlign disse tre logglinjene: mangler et verktøy som
+`metamcp_azure-devops__repo_file` allerede i den mottatte katalogen, må MetaMCP-
+eller OpenCode-konfigurasjonen utvides. Forsvinner det etter mottak, er det en
+AiProxy-feil.
+
 ### Rate limit
 
 Når en provider rapporterer en tolkbar kvotefeil, returnerer AiProxy HTTP `429` med `Retry-After` og feilkoden `rate_limit_exceeded`.

@@ -132,6 +132,27 @@ public static class ClientToolProtocol
         return true;
     }
 
+    /// <summary>
+    /// Fanger den ufullstendige PR-gjennomgangsturen der modellen sier at den trenger filer,
+    /// selv om klienten allerede har deklarert repository-filfunksjonen.
+    /// </summary>
+    public static bool RequiresAzureDevOpsFileCall(string response, IReadOnlyList<OpenAiFunctionTool> declaredTools)
+    {
+        if (!declaredTools.Any(tool => string.Equals(tool.Name, "metamcp_azure-devops__repo_file", StringComparison.Ordinal)))
+            return false;
+
+        var normalized = response.ToLowerInvariant();
+        var needsFileData = normalized.Contains("need") &&
+            (normalized.Contains("file content") || normalized.Contains("changed file") ||
+                normalized.Contains("file response") || normalized.Contains("remaining file") ||
+                normalized.Contains("both revision") || normalized.Contains("source and target"));
+        var reportsUnavailable = (normalized.Contains("cannot") || normalized.Contains("unavailable") ||
+            normalized.Contains("could not") || normalized.Contains("couldn't")) &&
+            (normalized.Contains("file") || normalized.Contains("diff") || normalized.Contains("repository"));
+
+        return needsFileData || reportsUnavailable;
+    }
+
     private static bool TryGetToolPayload(string response, out string label, out string json)
     {
         if (TryGetSingleFence(response, out label, out json))

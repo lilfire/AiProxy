@@ -342,6 +342,42 @@ public class ResponsesRequestMapperTests
     }
 
     [TestMethod]
+    public void MapToChatRequest_preserves_flat_and_nested_metamcp_tool_declarations()
+    {
+        var request = new OpenAiResponsesRequest
+        {
+            Model = "test-model",
+            Input = "Review the pull request",
+            Tools =
+            [
+                new OpenAiResponsesTool
+                {
+                    Type = "function",
+                    Name = "metamcp_azure-devops__repo_pull_request",
+                    Parameters = JsonSerializer.SerializeToElement(new { type = "object" })
+                },
+                new OpenAiResponsesTool
+                {
+                    Type = "function",
+                    Function = new OpenAiChatFunction
+                    {
+                        Name = "metamcp_azure-devops__repo_file",
+                        Description = "Reads a repository file",
+                        Parameters = JsonSerializer.SerializeToElement(new { type = "object" })
+                    }
+                }
+            ]
+        };
+
+        var result = CreateMapper().MapToChatRequest(request);
+
+        CollectionAssert.AreEqual(
+            new[] { "metamcp_azure-devops__repo_pull_request", "metamcp_azure-devops__repo_file" },
+            result.FunctionTools.Select(tool => tool.Name).ToArray());
+        Assert.AreEqual("Reads a repository file", result.FunctionTools[1].Description);
+    }
+
+    [TestMethod]
     public void MapToChatRequest_removes_messages_without_content()
     {
         var mapper = CreateMapper();
